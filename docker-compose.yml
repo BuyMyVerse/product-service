@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  demo-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: demo-api
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+    restart: unless-stopped
