@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+  "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+  "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+  BuyMyVerse — Checkstyle MINIMAL rules
+  Only checks that never conflict with Spring Boot code.
+  Does NOT block mvn compile or mvn build.
+-->
+<module name="Checker">
+  <property name="severity" value="error"/>
+  <property name="charset" value="UTF-8"/>
+
+  <module name="TreeWalker">
+
+    <!-- Naming only — catches obvious mistakes -->
+    <module name="TypeName"/>
+    <module name="MethodName"/>
+    <module name="ParameterName"/>
+    <module name="LocalVariableName"/>
+    <module name="PackageName">
+      <property name="format" value="^[a-z]+(\.[a-z][a-z0-9]*)*$"/>
+    </module>
+
+    <!-- Imports — only block truly bad imports -->
+    <module name="UnusedImports"/>
+    <module name="IllegalImport">
+      <property name="illegalPkgs" value="sun, com.sun"/>
+    </module>
+
+    <!-- Critical code quality only -->
+    <module name="StringLiteralEquality"/>
+    <module name="EqualsHashCode"/>
+    <module name="SimplifyBooleanReturn"/>
+    <module name="MissingOverride"/>
+
+  </module>
+</module>

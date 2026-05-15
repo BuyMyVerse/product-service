@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<ruleset name="BuyMyVerse Java Rules"
+  xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0
+    https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+  <description>BuyMyVerse PMD rules — Spring Boot friendly</description>
+
+  <!-- Best practices — catches real bugs -->
+  <rule ref="category/java/bestpractices.xml">
+    <exclude name="GuardLogStatement"/>
+    <exclude name="JUnitTestContainsTooManyAsserts"/>
+  </rule>
+
+  <!-- Error prone — catches real bugs -->
+  <rule ref="category/java/errorprone.xml">
+    <exclude name="DataflowAnomalyAnalysis"/>
+    <exclude name="NullAssignment"/>
+  </rule>
+
+  <!-- Performance — catches real issues -->
+  <rule ref="category/java/performance.xml"/>
+
+  <!-- Design — with Spring Boot exclusions -->
+  <rule ref="category/java/design.xml">
+    <exclude name="LawOfDemeter"/>
+    <exclude name="LoosePackageCoupling"/>
+    <exclude name="DataClass"/>
+    <!-- UseUtilityClass fires on @SpringBootApplication class — exclude it -->
+    <exclude name="UseUtilityClass"/>
+  </rule>
+
+  <!-- Code style — exclude noisy rules that flag normal Java patterns -->
+  <rule ref="category/java/codestyle.xml">
+    <exclude name="AtLeastOneConstructor"/>
+    <exclude name="OnlyOneReturn"/>
+    <exclude name="TooManyStaticImports"/>
+    <exclude name="CommentDefaultAccessModifier"/>
+    <!-- These 5 flag normal Spring Boot code — excluded -->
+    <exclude name="MethodArgumentCouldBeFinal"/>
+    <exclude name="LocalVariableCouldBeFinal"/>
+    <exclude name="ShortVariable"/>
+    <exclude name="ShortClassName"/>
+    <exclude name="ShortMethodName"/>
+  </rule>
+
+  <!-- Security — always on -->
+  <rule ref="category/java/security.xml"/>
+
+  <!-- Complexity limit -->
+  <rule ref="category/java/design.xml/CyclomaticComplexity">
+    <properties>
+      <property name="methodReportLevel" value="10"/>
+    </properties>
+  </rule>
+
+</ruleset>

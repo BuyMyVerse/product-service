@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Collections;
 import java.util.Optional;
 
 @Service
@@ -22,7 +23,7 @@ public class ProductService {
     }
 
     public List<Product> getAllProducts() {
-        return products;
+        return Collections.unmodifiableList(products);
     }
 
     public Optional<Product> getProductById(Long id) {

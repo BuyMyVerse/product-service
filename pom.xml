@@ -19,6 +19,8 @@
 
     <properties>
         <java.version>17</java.version>
+        <checkstyle.config>checkstyle.xml</checkstyle.config>
+        <pmd.ruleset>pmd-ruleset.xml</pmd.ruleset>
     </properties>
 
     <dependencies>
@@ -44,6 +46,8 @@
 
     <build>
         <plugins>
+
+            <!-- Spring Boot -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -51,6 +55,84 @@
                     <finalName>demo-api</finalName>
                 </configuration>
             </plugin>
+
+            <!--
+                Checkstyle
+                No <executions> — only runs via: mvn checkstyle:check
+                Pre-commit passes config explicitly:
+                  -Dcheckstyle.config.location=checkstyle.xml
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>3.3.1</version>
+                <configuration>
+                    <configLocation>${checkstyle.config}</configLocation>
+                    <failsOnError>true</failsOnError>
+                    <consoleOutput>true</consoleOutput>
+                    <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                </configuration>
+                <!-- NO executions -->
+            </plugin>
+
+            <!--
+                PMD
+                FIX: pinned to 3.21.2
+                     3.22.0 requires SLF4J 2.x — incompatible with this Maven
+                No <executions> — only runs via: mvn pmd:check
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>3.21.2</version>
+                <configuration>
+                    <rulesets>
+                        <ruleset>${pmd.ruleset}</ruleset>
+                    </rulesets>
+                    <failOnViolation>true</failOnViolation>
+                    <printFailingErrors>true</printFailingErrors>
+                    <linkXRef>false</linkXRef>
+                    <minimumTokens>100</minimumTokens>
+                </configuration>
+                <!-- NO executions -->
+            </plugin>
+
+            <!--
+                SpotBugs
+                No <executions> — pre-commit uses fully-qualified goal:
+                  mvn com.github.spotbugs:spotbugs-maven-plugin:4.8.3.0:check
+                This avoids "No plugin found for prefix spotbugs" error
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>4.8.3.0</version>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Medium</threshold>
+                    <failOnError>true</failOnError>
+                    <xmlOutput>true</xmlOutput>
+                </configuration>
+                <!-- NO executions -->
+            </plugin>
+
+            <!-- JaCoCo — test coverage, does not block compile -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <execution>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
         </plugins>
     </build>
 </project>

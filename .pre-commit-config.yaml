@@ -1,0 +1,83 @@
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+
+  # ── BLOCK 1: File hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: "[hygiene] Trailing whitespace"
+      - id: end-of-file-fixer
+        name: "[hygiene] Newline at end of file"
+      - id: check-yaml
+        name: "[hygiene] Validate YAML"
+      - id: check-json
+        name: "[hygiene] Validate JSON"
+      - id: check-xml
+        name: "[hygiene] Validate XML"
+      - id: check-merge-conflict
+        name: "[hygiene] Merge conflict markers"
+      - id: detect-private-key
+        name: "[security] Private key in code"
+      - id: check-added-large-files
+        name: "[hygiene] Large file blocked"
+        args: ["--maxkb=500"]
+      - id: mixed-line-ending
+        name: "[hygiene] Line endings LF"
+        args: ["--fix=lf"]
+      - id: check-case-conflict
+        name: "[hygiene] Case-insensitive filename"
+      - id: no-commit-to-branch
+        name: "[policy] No direct commit to main/develop"
+        args: ["--branch", "main", "--branch", "develop"]
+
+  # ── BLOCK 2: Checkstyle ───────────────────────────────────────────────────
+  # FIX: added -Dcheckstyle.config.location=checkstyle.xml
+  #      Without this flag, Maven ignores our checkstyle.xml and
+  #      falls back to the default Sun ruleset (242 violations!)
+  - repo: local
+    hooks:
+      - id: java-checkstyle
+        name: "[java] Checkstyle — style & naming"
+        language: system
+        entry: mvn checkstyle:check -q -Dcheckstyle.config.location=checkstyle.xml
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # ── BLOCK 3: PMD ──────────────────────────────────────────────────────────
+  # FIX: version pinned to 3.21.2 in pom.xml
+  #      3.22.0 requires SLF4J 2.x but your Maven uses 1.7.x
+  - repo: local
+    hooks:
+      - id: java-pmd
+        name: "[java] PMD — static analysis"
+        language: system
+        entry: mvn org.apache.maven.plugins:maven-pmd-plugin:3.21.2:check -q
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # ── BLOCK 4: SpotBugs ─────────────────────────────────────────────────────
+  # FIX: use fully-qualified plugin name
+  #      com.github.spotbugs is not in default Maven plugin groups
+  #      so "mvn spotbugs:check" fails — must use full groupId:artifactId:version:goal
+  - repo: local
+    hooks:
+      - id: java-spotbugs
+        name: "[java] SpotBugs — bytecode bug detection"
+        language: system
+        entry: bash -c '[ ! -d target/classes ] && mvn compile -q; mvn com.github.spotbugs:spotbugs-maven-plugin:4.8.3.0:check -q -Dspotbugs.threshold=High'
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # ── BLOCK 5: Unit tests ───────────────────────────────────────────────────
+  # Skip: SKIP_TESTS=1 git commit -m "WIP"
+  - repo: local
+    hooks:
+      - id: java-tests
+        name: "[java] Maven test suite"
+        language: system
+        entry: bash -c '[[ "${SKIP_TESTS:-0}" == "1" ]] && echo "Tests skipped" && exit 0 || mvn test -q'
+        pass_filenames: false
+        stages: [pre-commit]

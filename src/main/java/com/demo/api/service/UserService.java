@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Collections;
 import java.util.Optional;
 
 @Service
@@ -21,7 +22,7 @@ public class UserService {
     }
 
     public List<User> getAllUsers() {
-        return users;
+        return Collections.unmodifiableList(users);
     }
 
     public Optional<User> getUserById(Long id) {
