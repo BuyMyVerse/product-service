@@ -85,8 +85,9 @@ pipeline {
         stage('Build Maven Project') {
             steps {
                 echo 'Building Maven Project...'
-                withMaven(maven: 'Maven-3.9') {
-                    sh 'mvn clean install -DskipTests'
+                script{
+                    def mvnHome = tool name: 'Maven-3.9', type: 'maven'
+                    sh "${mvnHome}/bin/mvn clean install -DskipTests"
                 }
             }
         }
