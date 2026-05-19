@@ -85,7 +85,9 @@ pipeline {
         stage('Build Maven Project') {
             steps {
                 echo 'Building Maven Project...'
-                sh 'mvn clean install -DskipTests'
+                withMaven(maven: 'Maven-3.9') {
+                    sh 'mvn clean install -DskipTests'
+                }
             }
         }
 
