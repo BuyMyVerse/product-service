@@ -69,7 +69,7 @@ pipeline {
 
                     env.ACTUAL_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
 
-                    echo "=============================================="
+                    echo "============================================="
                     echo "COMMITTED_BY  : ${env.COMMITTED_BY}"
                     echo "SOURCE_BRANCH : ${env.SOURCE_BRANCH}"
                     echo "ACTUAL_BRANCH : ${env.ACTUAL_BRANCH}"
