@@ -94,7 +94,7 @@ pipeline {
 
         stage('Docker Build') {
             steps {
-                echo 'Building Docker Image...'
+                echo 'Building Docker Image....'
                 sh """
                     docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .
                     docker tag ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
