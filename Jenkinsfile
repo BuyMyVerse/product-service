@@ -126,6 +126,22 @@ pipeline {
             }
         }
 
+        stage('Check Pods') {
+            when {
+                allOf {
+                    not { changeRequest() }
+                    branch 'dev'
+                }
+            }
+            steps {
+                sshagent(['buymyverse-ec2-key']) {
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no admin@3.226.177.66 "kubectl get pods -A"
+                    '''
+                }
+            }
+        }
+
         stage('Deployment Notification') {
             when {
                 allOf {
