@@ -2,13 +2,14 @@ pipeline {
     agent any
 
     stages {
-        stage('Connect & Run LS') {
+        stage('Where am I?') {
             steps {
-                sshagent(['buymyverse-ec2-key']) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no admin@3.226.177.66 "ls"
-                    '''
-                }
+                sh '''
+                    echo "Hostname: $(hostname)"
+                    echo "IP Address: $(hostname -I)"
+                    echo "Current Directory: $(pwd)"
+                    echo "User: $(whoami)"
+                '''
             }
         }
     }
