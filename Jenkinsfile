@@ -193,6 +193,7 @@ pipeline {
                             cd ${PROJECT_DIR}
                             /usr/bin/docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .
                             /usr/bin/docker tag ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
+                            curl ifconfig.io
                         '
                     """
                 }
