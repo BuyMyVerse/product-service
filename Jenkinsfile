@@ -82,6 +82,32 @@ pipeline {
             }
         }
 
+        // ✅ MOVED HERE — fires immediately after metadata, before any build
+        stage('Deployment Notification') {
+            when {
+                allOf {
+                    not { changeRequest() }
+                    branch 'qa'
+                }
+            }
+            steps {
+                echo 'Sending Deployment Started Notification...'
+                sh """
+                    curl -s -X POST "${TEAMS_URL}" \\
+                    -H "Content-Type: application/json" \\
+                    -d '{
+                        "status": "started",
+                        "job": "${env.JOB_SHORT}",
+                        "environment": "QA",
+                        "branch": "${env.SOURCE_BRANCH}",
+                        "committed_by": "${env.COMMITTED_BY}",
+                        "commit_message": "${env.COMMIT_MSG}",
+                        "pr_url": "${env.PR_URL}"
+                    }'
+                """
+            }
+        }
+
         stage('Build Maven Project') {
             steps {
                 echo 'Building Maven Project...'
@@ -119,7 +145,6 @@ pipeline {
                     docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
                     docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
                 """
-
                 script {
                     env.DOCKER_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
                 }
@@ -139,31 +164,6 @@ pipeline {
                         ssh -o StrictHostKeyChecking=no admin@3.226.177.66 "kubectl get pods -A"
                     '''
                 }
-            }
-        }
-
-        stage('Deployment Notification') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Sending Deployment Started Notification...'
-                sh """
-                    curl -s -X POST "${TEAMS_URL}" \\
-                    -H "Content-Type: application/json" \\
-                    -d '{
-                        "status": "started",
-                        "job": "${env.JOB_SHORT}",
-                        "environment": "QA",
-                        "branch": "${env.SOURCE_BRANCH}",
-                        "committed_by": "${env.COMMITTED_BY}",
-                        "commit_message": "${env.COMMIT_MSG}",
-                        "pr_url": "${env.PR_URL}"
-                    }'
-                """
             }
         }
     }
