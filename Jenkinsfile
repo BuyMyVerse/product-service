@@ -5,8 +5,7 @@ pipeline {
         AWS_REGION      = 'us-east-1'
         ECR_REGISTRY    = '909783398453.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO        = 'buymyverse/product-service'
-        IMAGE_TAG       = "build-${env.BUILD_NUMBER}"
-
+        
         AWS_ACCESS_KEY  = credentials('aws-access-key-id')
         AWS_SECRET_KEY  = credentials('aws-secret-access-key')
         TEAMS_URL       = credentials('jenkins-cicd-webhook-url')
@@ -72,6 +71,9 @@ pipeline {
 
                     env.ACTUAL_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
 
+                    // ✅ QA timestamp-based image tag
+                    env.IMAGE_TAG = "qa-" + new Date().format("yyyy-MM-dd-HH-mm-ss")
+
                     echo "============================================="
                     echo "COMMITTED_BY  : ${env.COMMITTED_BY}"
                     echo "SOURCE_BRANCH : ${env.SOURCE_BRANCH}"
@@ -80,6 +82,7 @@ pipeline {
                     echo "PR_NUMBER     : ${env.PR_NUMBER}"
                     echo "COMMIT_HASH   : ${env.COMMIT_HASH}"
                     echo "PR_URL        : ${env.PR_URL}"
+                    echo "IMAGE_TAG     : ${env.IMAGE_TAG}"
                     echo "=============================================="
                 }
             }
@@ -89,7 +92,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -104,7 +107,8 @@ pipeline {
                         "branch": "${env.SOURCE_BRANCH}",
                         "committed_by": "${env.COMMITTED_BY}",
                         "commit_message": "${env.COMMIT_MSG}",
-                        "pr_url": "${env.PR_URL}"
+                        "pr_url": "${env.PR_URL}",
+                        "image_tag": "${env.IMAGE_TAG}"
                     }'
                 """
             }
@@ -114,7 +118,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -127,6 +131,7 @@ pipeline {
                             echo "Maven: "\$(/usr/bin/mvn -version 2>&1 | head -1)
                             echo "Docker: "\$(/usr/bin/docker --version)
                             echo "AWS: "\$(/usr/bin/aws --version)
+                            echo "Java: "\$(java -version 2>&1 | head -1)
                         '
                     """
                 }
@@ -137,7 +142,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -160,7 +165,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -181,7 +186,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -191,9 +196,8 @@ pipeline {
                         ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
                             set -e
                             cd ${PROJECT_DIR}
-                            /usr/bin/docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .
-                            /usr/bin/docker tag ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
-                            curl ifconfig.io
+                            /usr/bin/docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} .
+                            /usr/bin/docker tag ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
                         '
                     """
                 }
@@ -204,7 +208,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -217,13 +221,13 @@ pipeline {
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
                             /usr/bin/aws ecr get-login-password --region ${AWS_REGION} | \
                             /usr/bin/docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                            /usr/bin/docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                            /usr/bin/docker push ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG}
                             /usr/bin/docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
                         '
                     """
                 }
                 script {
-                    env.DOCKER_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+                    env.DOCKER_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -232,7 +236,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'qa'   // ← CHANGED
+                    branch 'qa'
                 }
             }
             steps {
@@ -248,7 +252,7 @@ pipeline {
     post {
         success {
             script {
-                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {   // ← CHANGED
+                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
@@ -260,6 +264,7 @@ pipeline {
                             "committed_by": "${env.COMMITTED_BY}",
                             "commit_message": "${env.COMMIT_MSG}",
                             "pr_url": "${env.PR_URL}",
+                            "image_tag": "${env.IMAGE_TAG}",
                             "docker_image": "${env.DOCKER_IMAGE}",
                             "result": "SUCCESS"
                         }'
@@ -271,7 +276,7 @@ pipeline {
 
         failure {
             script {
-                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {   // ← CHANGED
+                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
@@ -283,6 +288,7 @@ pipeline {
                             "committed_by": "${env.COMMITTED_BY}",
                             "commit_message": "${env.COMMIT_MSG}",
                             "pr_url": "${env.PR_URL}",
+                            "image_tag": "${env.IMAGE_TAG}",
                             "result": "FAILED"
                         }'
                     """
