@@ -5,7 +5,7 @@ pipeline {
         AWS_REGION      = 'us-east-1'
         ECR_REGISTRY    = '909783398453.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO        = 'buymyverse/product-service'
-        IMAGE_TAG = "${env.BRANCH_NAME}-${new Date().format('yyyy-MM-dd')}"
+        IMAGE_TAG       = "${env.BRANCH_NAME}-${new Date().format('yyyy-MM-dd-HH-mm-ss')}"
         
         AWS_ACCESS_KEY  = credentials('aws-access-key-id')
         AWS_SECRET_KEY  = credentials('aws-secret-access-key')
@@ -58,6 +58,8 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
+                    env.BUILD_TIMESTAMP = new Date().format('yyyy-MM-dd HH:mm:ss')
+
                     def prNum = env.PR_NUMBER?.trim()
                     if (env.CHANGE_URL) {
                         env.PR_URL = env.CHANGE_URL
@@ -77,12 +79,12 @@ pipeline {
                     echo "PR_NUMBER     : ${env.PR_NUMBER}"
                     echo "COMMIT_HASH   : ${env.COMMIT_HASH}"
                     echo "PR_URL        : ${env.PR_URL}"
+                    echo "BUILD_TIMESTAMP: ${env.BUILD_TIMESTAMP}"
                     echo "=============================================="
                 }
             }
         }
 
-        // ✅ MOVED HERE — fires immediately after metadata, before any build
         stage('Deployment Notification') {
             when {
                 allOf {
@@ -102,7 +104,8 @@ pipeline {
                         "branch": "${env.SOURCE_BRANCH}",
                         "committed_by": "${env.COMMITTED_BY}",
                         "commit_message": "${env.COMMIT_MSG}",
-                        "pr_url": "${env.PR_URL}"
+                        "pr_url": "${env.PR_URL}",
+                        "timestamp": "${env.BUILD_TIMESTAMP}"
                     }'
                 """
             }
@@ -184,6 +187,7 @@ pipeline {
                             "commit_message": "${env.COMMIT_MSG}",
                             "pr_url": "${env.PR_URL}",
                             "docker_image": "${env.DOCKER_IMAGE}",
+                            "timestamp": "${env.BUILD_TIMESTAMP}",
                             "result": "SUCCESS"
                         }'
                     """
@@ -206,6 +210,7 @@ pipeline {
                             "committed_by": "${env.COMMITTED_BY}",
                             "commit_message": "${env.COMMIT_MSG}",
                             "pr_url": "${env.PR_URL}",
+                            "timestamp": "${env.BUILD_TIMESTAMP}",
                             "result": "FAILED"
                         }'
                     """
