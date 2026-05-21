@@ -5,7 +5,7 @@ pipeline {
         AWS_REGION      = 'us-east-1'
         ECR_REGISTRY    = '909783398453.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO        = 'buymyverse/product-service'
-        IMAGE_TAG       = "${env.BRANCH_NAME}-${new Date().format('yyyy-MM-dd-HH-mm-ss')}"
+        IMAGE_TAG = "${env.BRANCH_NAME}-${new Date().format('yyyy-MM-dd-HH-mm-ss', TimeZone.getTimeZone('Asia/Kolkata'))}"
         
         AWS_ACCESS_KEY  = credentials('aws-access-key-id')
         AWS_SECRET_KEY  = credentials('aws-secret-access-key')
@@ -58,7 +58,7 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.BUILD_TIMESTAMP = new Date().format('yyyy-MM-dd HH:mm:ss')
+                    env.BUILD_TIMESTAMP = new Date().format('yyyy-MM-dd HH:mm:ss', TimeZone.getTimeZone('Asia/Kolkata'))
 
                     def prNum = env.PR_NUMBER?.trim()
                     if (env.CHANGE_URL) {
