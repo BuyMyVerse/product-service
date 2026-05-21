@@ -89,7 +89,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -100,7 +100,7 @@ pipeline {
                     -d '{
                         "status": "started",
                         "job": "${env.JOB_SHORT}",
-                        "environment": "Development",
+                        "environment": "QA",
                         "branch": "${env.SOURCE_BRANCH}",
                         "committed_by": "${env.COMMITTED_BY}",
                         "commit_message": "${env.COMMIT_MSG}",
@@ -114,7 +114,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -137,7 +137,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -148,8 +148,8 @@ pipeline {
                             set -e
                             cd ${PROJECT_DIR}
                             git fetch --all
-                            git checkout dev
-                            git pull origin dev
+                            git checkout qa
+                            git pull origin qa
                         '
                     """
                 }
@@ -160,7 +160,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -181,7 +181,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -203,7 +203,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -231,7 +231,7 @@ pipeline {
             when {
                 allOf {
                     not { changeRequest() }
-                    branch 'dev'
+                    branch 'qa'   // ← CHANGED
                 }
             }
             steps {
@@ -247,14 +247,14 @@ pipeline {
     post {
         success {
             script {
-                if (env.BRANCH_NAME == 'dev' && !env.CHANGE_ID) {
+                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {   // ← CHANGED
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
                         -d '{
                             "status": "ended",
                             "job": "${env.JOB_SHORT}",
-                            "environment": "Development",
+                            "environment": "QA",
                             "branch": "${env.SOURCE_BRANCH}",
                             "committed_by": "${env.COMMITTED_BY}",
                             "commit_message": "${env.COMMIT_MSG}",
@@ -270,14 +270,14 @@ pipeline {
 
         failure {
             script {
-                if (env.BRANCH_NAME == 'dev' && !env.CHANGE_ID) {
+                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {   // ← CHANGED
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
                         -d '{
                             "status": "ended",
                             "job": "${env.JOB_SHORT}",
-                            "environment": "Development",
+                            "environment": "QA",
                             "branch": "${env.SOURCE_BRANCH}",
                             "committed_by": "${env.COMMITTED_BY}",
                             "commit_message": "${env.COMMIT_MSG}",
