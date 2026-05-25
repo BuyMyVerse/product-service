@@ -3,7 +3,7 @@
 A simple Spring Boot 3 REST API (Java 17) with in-memory sample data — no database required.
 
 ---
-
+ 
 ## 📦 Project Structure
 
 ```
