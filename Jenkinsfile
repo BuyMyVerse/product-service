@@ -8,19 +8,19 @@ pipeline {
 
     environment {
         // ─── Remote Build VM ─────────────────────────────────────────────────
-        REMOTE_HOST  = "3.226.177.66"
-        REMOTE_USER  = "admin"
-        SSH_CRED_ID  = "jenkins-agent-ssh-key"
+        REMOTE_HOST     = "3.226.177.66"
+        REMOTE_USER     = "admin"
+        SSH_CRED_ID     = "jenkins-agent-ssh-key"
+        // Code already lives here on the VM — no git clone needed
+        PROJECT_PATH    = "/home/admin/Jenkins-deployment/product-service"
 
         // ─── Nexus Registry ──────────────────────────────────────────────────
-        NEXUS_HOST   = "dev-artifacthub.evaequitymtest.com"
-        NEXUS_REPO   = "buymyverse-docker-dev"
-        IMAGE_NAME   = "product-service"
-        IMAGE_TAG    = "dev-${new Date().format('yyyy-MM-dd-HH-mm-ss')}"
-        FULL_IMAGE   = "${NEXUS_HOST}/${NEXUS_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
-
-        // ─── Nexus Credentials (add in Jenkins → Credentials) ────────────────
-        NEXUS_CRED_ID = "nexus-credentials"   // Jenkins credential ID
+        NEXUS_HOST      = "dev-artifacthub.evaequitymtest.com"
+        NEXUS_REPO      = "buymyverse-docker-dev"
+        IMAGE_NAME      = "product-service"
+        IMAGE_TAG       = "dev-${new Date().format('yyyy-MM-dd-HH-mm-ss')}"
+        FULL_IMAGE      = "${NEXUS_HOST}/${NEXUS_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
+        NEXUS_CRED_ID   = "nexus-credentials"
     }
 
     options {
@@ -42,26 +42,17 @@ pipeline {
                 echo "  Branch     : ${GIT_BRANCH}"
                 echo "  Image Tag  : ${IMAGE_TAG}"
                 echo "  Target VM  : ${REMOTE_USER}@${REMOTE_HOST}"
+                echo "  Source     : ${PROJECT_PATH}"
                 echo "  Nexus Repo : ${NEXUS_HOST}/${NEXUS_REPO}"
                 echo "  Started At : ${new Date()}"
                 echo "========================================================"
             }
         }
 
-        // ── Stage 2: Git Checkout ─────────────────────────────────────────────
+        // ── Stage 2: Git Checkout (pull latest on remote VM) ──────────────────
         stage('Git Checkout') {
             steps {
-                echo "📥 Checking out branch: ${GIT_BRANCH}"
-                checkout scm
-                echo "✅ Checked out commit: ${GIT_COMMIT}"
-                echo "✅ Branch: ${GIT_BRANCH}"
-            }
-        }
-
-        // ── Stage 3: Docker Build (on remote VM via SSH) ──────────────────────
-        stage('Docker Build') {
-            steps {
-                echo "🐳 Building Docker image on remote VM: ${FULL_IMAGE}"
+                echo "📥 Pulling latest code on remote VM: branch ${GIT_BRANCH}"
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -69,22 +60,48 @@ pipeline {
                 )]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-
                         ssh -i \$SSH_KEY_FILE \\
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
 
-                            echo "=== Cleaning old workspace ==="
-                            rm -rf /tmp/product-service-build
-                            mkdir -p /tmp/product-service-build
+                            echo "=== Pulling latest code ==="
+                            cd ${PROJECT_PATH}
+                            git fetch --all
+                            git checkout ${GIT_BRANCH}
+                            git pull origin ${GIT_BRANCH}
 
-                            echo "=== Cloning repo ==="
-                            git clone --branch ${GIT_BRANCH} https://github.com/BuyMyVerse/product-service.git /tmp/product-service-build
+                            echo "✅ Branch  : \$(git branch --show-current)"
+                            echo "✅ Commit  : \$(git rev-parse --short HEAD)"
+                            echo "✅ Message : \$(git log -1 --pretty=%B)"
+                        '
+                    """
+                }
+            }
+        }
+
+        // ── Stage 3: Docker Build ─────────────────────────────────────────────
+        stage('Docker Build') {
+            steps {
+                echo "🐳 Building Docker image: ${FULL_IMAGE}"
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: "${SSH_CRED_ID}",
+                    keyFileVariable: 'SSH_KEY_FILE',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    sh """
+                        chmod 600 \$SSH_KEY_FILE
+                        ssh -i \$SSH_KEY_FILE \\
+                            -o StrictHostKeyChecking=no \\
+                            -o BatchMode=yes \\
+                            ${REMOTE_USER}@${REMOTE_HOST} '
 
                             echo "=== Building Docker image ==="
-                            cd /tmp/product-service-build
+                            cd ${PROJECT_PATH}
                             docker build -t ${FULL_IMAGE} .
+
+                            echo "=== Image built ==="
+                            docker images | grep product-service
 
                             echo "✅ Docker build complete: ${FULL_IMAGE}"
                         '
@@ -111,7 +128,6 @@ pipeline {
                 ]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-
                         ssh -i \$SSH_KEY_FILE \\
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
@@ -122,31 +138,47 @@ pipeline {
                                 --username ${NEXUS_USER} \\
                                 --password-stdin
 
-                            echo "=== Pushing image ==="
+                            echo "=== Pushing image to Nexus ==="
                             docker push ${FULL_IMAGE}
 
                             echo "=== Logging out ==="
                             docker logout ${NEXUS_HOST}
 
-                            echo "✅ Pushed: ${FULL_IMAGE}"
+                            echo "=== Cleaning local image to free disk ==="
+                            docker rmi ${FULL_IMAGE} 2>/dev/null || true
+
+                            echo "✅ Pushed successfully: ${FULL_IMAGE}"
                         '
                     """
                 }
             }
         }
 
-        // ── Stage 5: Verify Kubernetes Namespaces ─────────────────────────────
+        // ── Stage 5: kubectl get ns (run on VM via SSH) ───────────────────────
+        // kubectl is on the VM, not in the jnlp pod — so SSH to run it
         stage('kubectl get ns') {
             steps {
-                echo "☸️  Listing Kubernetes namespaces from agent pod..."
-                sh """
-                    kubectl get ns
-                """
+                echo "☸️  Listing Kubernetes namespaces via VM..."
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: "${SSH_CRED_ID}",
+                    keyFileVariable: 'SSH_KEY_FILE',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    sh """
+                        chmod 600 \$SSH_KEY_FILE
+                        ssh -i \$SSH_KEY_FILE \\
+                            -o StrictHostKeyChecking=no \\
+                            -o BatchMode=yes \\
+                            ${REMOTE_USER}@${REMOTE_HOST} '
+                            echo "=== Kubernetes Namespaces ==="
+                            kubectl get ns
+                        '
+                    """
+                }
             }
         }
     }
 
-    // ── Post: Cleanup & Final Status ──────────────────────────────────────────
     post {
         success {
             echo "========================================================"
