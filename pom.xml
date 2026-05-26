@@ -13,7 +13,7 @@
 
     <groupId>com.buymyverse</groupId>
     <artifactId>product-service</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>${ARTIFACT_VERSION}</version>
     <name>BuyMyVerse Product Service</name>
     <description>Product Service for BuyMyVerse platform</description>
 
@@ -23,37 +23,32 @@
         <pmd.ruleset>pmd-ruleset.xml</pmd.ruleset>
 
         <!-- ─────────────────────────────────────────────────────────
-             NEXUS URL — controlled by environment variable
-             Set in CI / shell before running mvn:
-
-               DEV:
-                 export NEXUS_URL=https://dev-artifacthub.evaequitymtest.com/repository
-                 export NEXUS_ENV=dev
-
-               PROD:
-                 export NEXUS_URL=https://dev-artifacthub.evaequitymtest.com/repository
-                 export NEXUS_ENV=prod
-
-             Or pass directly on the command line:
-               mvn clean deploy -DNEXUS_URL=https://... -DNEXUS_ENV=dev
+             NEXUS — driven by environment variables or -D flags
+             QA      : NEXUS_ENV=dev,  ARTIFACT_VERSION=1.0.0-SNAPSHOT
+             Beta    : NEXUS_ENV=beta, ARTIFACT_VERSION=1.0.0-BETA
+             Release : NEXUS_ENV=prod, ARTIFACT_VERSION=1.0.0
         ───────────────────────────────────────────────────────── -->
         <NEXUS_URL>${env.NEXUS_URL}</NEXUS_URL>
         <NEXUS_ENV>${env.NEXUS_ENV}</NEXUS_ENV>
+        <ARTIFACT_VERSION>${env.ARTIFACT_VERSION}</ARTIFACT_VERSION>
     </properties>
 
     <!-- ─────────────────────────────────────────────────────────────
          Distribution Management
-         Snapshot  (version ends -SNAPSHOT) → buymyverse-maven-dev
-         Release   (version is plain semver) → buymyverse-maven-prod
-         Both URLs are built from NEXUS_URL + NEXUS_ENV env variables
+         QA      → buymyverse-maven-dev   (SNAPSHOT policy)
+         Beta    → buymyverse-maven-beta  (Release  policy)
+         Release → buymyverse-maven-prod  (Release  policy)
     ───────────────────────────────────────────────────────────── -->
     <distributionManagement>
+        <!-- QA Snapshots -->
         <snapshotRepository>
             <id>buymyverse-maven-dev</id>
-            <url>${NEXUS_URL}/buymyverse-maven-${NEXUS_ENV}/</url>
+            <url>${NEXUS_URL}/buymyverse-maven-dev/</url>
         </snapshotRepository>
+
+        <!-- Beta + Release (NEXUS_ENV switches between beta / prod) -->
         <repository>
-            <id>buymyverse-maven-prod</id>
+            <id>buymyverse-maven-${NEXUS_ENV}</id>
             <url>${NEXUS_URL}/buymyverse-maven-${NEXUS_ENV}/</url>
         </repository>
     </distributionManagement>
@@ -112,7 +107,7 @@
                 </configuration>
             </plugin>
 
-            <!-- Checkstyle — runs via: mvn checkstyle:check -->
+            <!-- Checkstyle -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
@@ -125,7 +120,7 @@
                 </configuration>
             </plugin>
 
-            <!-- PMD — runs via: mvn pmd:check -->
+            <!-- PMD -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-pmd-plugin</artifactId>
@@ -141,7 +136,7 @@
                 </configuration>
             </plugin>
 
-            <!-- SpotBugs — runs via: mvn com.github.spotbugs:spotbugs-maven-plugin:4.8.3.0:check -->
+            <!-- SpotBugs -->
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
@@ -154,7 +149,7 @@
                 </configuration>
             </plugin>
 
-            <!-- JaCoCo — test coverage report -->
+            <!-- JaCoCo -->
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
@@ -169,6 +164,13 @@
                         <goals><goal>report</goal></goals>
                     </execution>
                 </executions>
+            </plugin>
+
+            <!-- Versions plugin — used by Jenkins to stamp version at build time -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>versions-maven-plugin</artifactId>
+                <version>2.16.2</version>
             </plugin>
 
         </plugins>
