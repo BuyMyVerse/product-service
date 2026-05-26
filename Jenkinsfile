@@ -1,42 +1,11 @@
 pipeline {
 
-    // ── Run entire pipeline inside a temporary EKS pod ──────────────────────
-    // Pod is created before the first stage and deleted automatically after post{}
+    // ── Use the existing pod template configured in Jenkins UI ───────────────
+    // Manage Jenkins → Clouds → Kubernetes → Pod Templates → jenkins-agent
     agent {
         kubernetes {
-            label "product-service-agent-${BUILD_NUMBER}"
+            inheritFrom 'jenkins-agent'   // ← matches the Name field in your Pod template settings
             defaultContainer 'jenkins-agent'
-            yaml """
-apiVersion: v1
-kind: Pod
-metadata:
-  labels:
-    app: jenkins-agent
-    job: product-service
-spec:
-  # Pod will NOT restart after completion — it gets deleted by Jenkins
-  restartPolicy: Never
-  containers:
-    - name: jenkins-agent
-      image: jenkins/inbound-agent:latest
-      tty: true
-      resources:
-        requests:
-          cpu: "250m"
-          memory: "256Mi"
-        limits:
-          cpu: "500m"
-          memory: "512Mi"
-      volumeMounts:
-        - name: ssh-key-vol
-          mountPath: /etc/ssh-key
-          readOnly: true
-  volumes:
-    - name: ssh-key-vol
-      secret:
-        secretName: jenkins-agent-ssh-key   # ← Kubernetes secret (see setup below)
-        defaultMode: 0600
-"""
         }
     }
 
@@ -73,12 +42,10 @@ spec:
                 )]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-
                         ssh -i \$SSH_KEY_FILE \\
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
-
                             echo "======================================"
                             echo "  SSH Connection Successful!"
                             echo "  (from EKS Jenkins agent pod)"
@@ -100,8 +67,8 @@ spec:
 
     // ── Pod is automatically deleted by Jenkins after this block ─────────────
     post {
-        success { echo "✅ Done. EKS pod will now be deleted automatically." }
-        failure  { echo "❌ Pipeline failed. EKS pod will still be cleaned up." }
+        success { echo "✅ Done. EKS pod deleted automatically." }
+        failure  { echo "❌ Pipeline failed. EKS pod still cleaned up." }
         always   { cleanWs() }
     }
 }
