@@ -10,12 +10,12 @@ pipeline {
         choice(
             name: 'LABEL',
             choices: ['QA', 'Beta', 'Release'],
-            description: 'Select build type for artifact publishing'
+            description: 'Select build type to download from Nexus'
         )
         string(
             name: 'VERSION',
             defaultValue: '',
-            description: 'Enter release version (Example: 1.0.0)'
+            description: 'Enter the version to download (Example: 1.0.0)'
         )
     }
 
@@ -23,15 +23,21 @@ pipeline {
         REMOTE_HOST    = "3.226.177.66"
         REMOTE_USER    = "admin"
         SSH_CRED_ID    = "jenkins-agent-ssh-key"
-        REMOTE_PATH    = "/home/admin/Jenkins-deployment/QA-Artifact-Push/product-service"
-        GIT_BRANCH     = "Push-Artifact"
         NEXUS_BASE_URL = "https://dev-artifacthub.evaequitymtest.com/repository"
+        DEMO_PATH      = "/home/admin/Jenkins-deployment/Demo-Environment"
+        GROUP_PATH     = "com/buymyverse"
+        ARTIFACT_ID    = "product-service"
+
+        // ── Nexus Credentials ──────────────────────────────────
+        NEXUS_USER     = "admin"
+        NEXUS_PASS     = "nexusadmin"
+        NEXUS_REGISTRY = "dev-artifacthub.evaequitymtest.com"
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
-        timeout(time: 15, unit: 'MINUTES')
+        timeout(time: 10, unit: 'MINUTES')
     }
 
     stages {
@@ -42,53 +48,50 @@ pipeline {
         stage('Validate Parameters') {
             steps {
                 script {
-                    // Guard: VERSION must not be blank
                     if (!params.VERSION?.trim()) {
                         error("❌ VERSION is required! Example: 1.0.0")
                     }
-
-                    // Validate semver format  e.g. 1.0.0 or 1.2.3
                     if (!(params.VERSION ==~ /^\d+\.\d+\.\d+$/)) {
-                        error("❌ VERSION must follow semver format: MAJOR.MINOR.PATCH (e.g. 1.0.0)")
+                        error("❌ VERSION must follow semver: MAJOR.MINOR.PATCH (e.g. 1.0.0)")
                     }
 
-                    // ── Map LABEL → Nexus repo + Maven version ──────────
                     switch (params.LABEL) {
                         case 'QA':
-                            // SNAPSHOT policy repo — must end with -SNAPSHOT
-                            env.NEXUS_ENV     = 'dev'
-                            env.NEXUS_REPO_ID = 'buymyverse-maven-dev'
-                            env.MVN_VERSION   = "${params.VERSION}-SNAPSHOT"
+                            env.NEXUS_REPO  = 'buymyverse-maven-dev'
+                            env.MVN_VERSION = "${params.VERSION}-SNAPSHOT"
+                            env.IS_SNAPSHOT = 'true'
                             break
 
                         case 'Beta':
-                            // Release policy repo — plain version with -BETA suffix
-                            env.NEXUS_ENV     = 'beta'
-                            env.NEXUS_REPO_ID = 'buymyverse-maven-beta'
-                            env.MVN_VERSION   = "${params.VERSION}-BETA"
+                            env.NEXUS_REPO  = 'buymyverse-maven-beta'
+                            env.MVN_VERSION = "${params.VERSION}-BETA"
+                            env.IS_SNAPSHOT = 'false'
                             break
 
                         case 'Release':
-                            // Release policy repo — plain semver, no suffix
-                            env.NEXUS_ENV     = 'prod'
-                            env.NEXUS_REPO_ID = 'buymyverse-maven-prod'
-                            env.MVN_VERSION   = "${params.VERSION}"
+                            env.NEXUS_REPO  = 'buymyverse-maven-prod'
+                            env.MVN_VERSION = "${params.VERSION}"
+                            env.IS_SNAPSHOT = 'false'
                             break
 
                         default:
                             error("❌ Unknown LABEL: ${params.LABEL}")
                     }
 
+                    env.NEXUS_ARTIFACT_URL = "${NEXUS_BASE_URL}/${env.NEXUS_REPO}/${GROUP_PATH}/${ARTIFACT_ID}/${env.MVN_VERSION}"
+                    env.DEST_JAR_NAME      = "${ARTIFACT_ID}-${env.MVN_VERSION}.jar"
+
                     echo """
                     ╔══════════════════════════════════════════╗
-                    ║        BUILD PARAMETERS RESOLVED         ║
+                    ║       DOWNLOAD PARAMETERS RESOLVED       ║
                     ╠══════════════════════════════════════════╣
                     ║  LABEL      : ${params.LABEL}
                     ║  VERSION    : ${params.VERSION}
                     ║  MVN_VERSION: ${env.MVN_VERSION}
-                    ║  NEXUS_ENV  : ${env.NEXUS_ENV}
-                    ║  NEXUS_REPO : ${env.NEXUS_REPO_ID}
-                    ║  NEXUS_URL  : ${NEXUS_BASE_URL}
+                    ║  NEXUS_REPO : ${env.NEXUS_REPO}
+                    ║  IS_SNAPSHOT: ${env.IS_SNAPSHOT}
+                    ║  ARTIFACT   : ${env.DEST_JAR_NAME}
+                    ║  DEST_PATH  : ${DEMO_PATH}
                     ╚══════════════════════════════════════════╝
                     """
                 }
@@ -96,17 +99,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 1 — Checkout (EKS pod)
-        // ─────────────────────────────────────────────────────────────────
-        stage('Checkout') {
-            steps {
-                echo "📥 Checking out source inside EKS pod..."
-                checkout scm
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────
-        // STAGE 2 — SSH Verify Connection
+        // STAGE 1 — SSH Verify Connection
         // ─────────────────────────────────────────────────────────────────
         stage('SSH: Verify Connection') {
             steps {
@@ -123,9 +116,8 @@ pipeline {
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
                                 echo "✅ SSH Connection Successful!"
-                                echo "🖥️  Host : \$(hostname)"
-                                echo "📅 Date  : \$(date)"
-                                ls -lah \$HOME
+                                echo "🖥️  Host: \$(hostname)"
+                                echo "📅 Date: \$(date)"
                             '
                     """
                 }
@@ -133,11 +125,11 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 3 — Navigate to Project Directory
+        // STAGE 2 — Prepare Demo Environment Directory
         // ─────────────────────────────────────────────────────────────────
-        stage('CD: Navigate to Project Directory') {
+        stage('Prepare: Demo Environment Directory') {
             steps {
-                echo "📂 Navigating to ${REMOTE_PATH}..."
+                echo "📂 Preparing ${DEMO_PATH}..."
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -149,9 +141,10 @@ pipeline {
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
-                                cd ${REMOTE_PATH} || { echo "❌ Directory not found: ${REMOTE_PATH}"; exit 1; }
-                                echo "✅ Current directory: \$(pwd)"
-                                ls -lah
+                                mkdir -p ${DEMO_PATH}
+                                echo "✅ Directory ready: ${DEMO_PATH}"
+                                echo "📂 Current contents:"
+                                ls -lah ${DEMO_PATH}
                             '
                     """
                 }
@@ -159,11 +152,114 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 4 — Git Checkout
+        // STAGE 3 — Download Artifact from Nexus
+        // Beta/Release → direct curl (exact filename known)
+        // QA/SNAPSHOT  → parse maven-metadata.xml → get latest timestamp
         // ─────────────────────────────────────────────────────────────────
-        stage('Git: Checkout Branch') {
+        stage('Download: Pull Artifact from Nexus') {
             steps {
-                echo "🌿 Switching to branch: ${GIT_BRANCH}..."
+                echo "⬇️  Downloading ${env.MVN_VERSION} from ${env.NEXUS_REPO}..."
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: "${SSH_CRED_ID}",
+                    keyFileVariable: 'SSH_KEY_FILE',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    sh """
+                        chmod 600 \$SSH_KEY_FILE
+                        ssh -i \$SSH_KEY_FILE \\
+                            -o StrictHostKeyChecking=no \\
+                            -o BatchMode=yes \\
+                            ${REMOTE_USER}@${REMOTE_HOST} bash -s << 'ENDSSH'
+
+                            set -e
+
+                            NEXUS_USER="${NEXUS_USER}"
+                            NEXUS_PASS="${NEXUS_PASS}"
+                            NEXUS_ARTIFACT_URL="${env.NEXUS_ARTIFACT_URL}"
+                            IS_SNAPSHOT="${env.IS_SNAPSHOT}"
+                            DEST_JAR_NAME="${env.DEST_JAR_NAME}"
+                            DEMO_PATH="${DEMO_PATH}"
+                            ARTIFACT_ID="${ARTIFACT_ID}"
+                            MVN_VERSION="${env.MVN_VERSION}"
+
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "⬇️  Artifact URL base : \${NEXUS_ARTIFACT_URL}"
+                            echo "📦 Target jar        : \${DEST_JAR_NAME}"
+                            echo "📂 Destination       : \${DEMO_PATH}"
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+                            if [ "\${IS_SNAPSHOT}" = "true" ]; then
+
+                                # ── SNAPSHOT: resolve latest timestamped jar via metadata ──
+                                echo "🔍 SNAPSHOT detected — resolving latest timestamp..."
+                                METADATA_URL="\${NEXUS_ARTIFACT_URL}/maven-metadata.xml"
+                                echo "📄 Fetching metadata: \${METADATA_URL}"
+
+                                METADATA=\$(curl -sf -u "\${NEXUS_USER}:\${NEXUS_PASS}" "\${METADATA_URL}")
+
+                                if [ -z "\${METADATA}" ]; then
+                                    echo "❌ Failed to fetch maven-metadata.xml from Nexus"
+                                    exit 1
+                                fi
+
+                                echo "\${METADATA}"
+
+                                # Extract latest snapshot value (e.g. 1.0.0-20260526.183249-6)
+                                SNAPSHOT_VERSION=\$(echo "\${METADATA}" | grep -o '<value>[^<]*</value>' | tail -1 | sed 's/<[^>]*>//g')
+
+                                if [ -z "\${SNAPSHOT_VERSION}" ]; then
+                                    echo "❌ Could not resolve snapshot version from metadata"
+                                    exit 1
+                                fi
+
+                                echo "✅ Latest snapshot  : \${SNAPSHOT_VERSION}"
+                                JAR_FILENAME="\${ARTIFACT_ID}-\${SNAPSHOT_VERSION}.jar"
+                                DOWNLOAD_URL="\${NEXUS_ARTIFACT_URL}/\${JAR_FILENAME}"
+
+                            else
+
+                                # ── Beta / Release: exact filename directly ─────────────
+                                JAR_FILENAME="\${DEST_JAR_NAME}"
+                                DOWNLOAD_URL="\${NEXUS_ARTIFACT_URL}/\${JAR_FILENAME}"
+
+                            fi
+
+                            echo ""
+                            echo "🌐 Download URL : \${DOWNLOAD_URL}"
+                            echo "💾 Save as      : \${DEMO_PATH}/\${DEST_JAR_NAME}"
+                            echo ""
+
+                            # ── Clean old jars from demo folder ────────────────────────
+                            echo "🧹 Cleaning old \${ARTIFACT_ID} jars from \${DEMO_PATH}..."
+                            rm -f \${DEMO_PATH}/\${ARTIFACT_ID}-*.jar
+                            echo "✅ Old jars removed"
+
+                            # ── Download from Nexus ────────────────────────────────────
+                            echo "⬇️  Downloading now..."
+                            curl -f \\
+                                --progress-bar \\
+                                -u "\${NEXUS_USER}:\${NEXUS_PASS}" \\
+                                -o "\${DEMO_PATH}/\${DEST_JAR_NAME}" \\
+                                "\${DOWNLOAD_URL}"
+
+                            echo ""
+                            echo "✅ Download complete!"
+                            echo ""
+                            echo "📂 Demo Environment contents:"
+                            ls -lah \${DEMO_PATH}
+
+ENDSSH
+                    """
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // STAGE 4 — Verify Artifact in Demo Environment
+        // ─────────────────────────────────────────────────────────────────
+        stage('Verify: Artifact in Demo Environment') {
+            steps {
+                echo "🔍 Verifying artifact landed correctly..."
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -175,96 +271,23 @@ pipeline {
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
-                                cd ${REMOTE_PATH} || { echo "❌ Directory not found: ${REMOTE_PATH}"; exit 1; }
-                                echo "🔄 Fetching latest from remote..."
-                                git fetch origin
-                                echo "🌿 Checking out: ${GIT_BRANCH}"
-                                git checkout ${GIT_BRANCH} || git checkout -b ${GIT_BRANCH} origin/${GIT_BRANCH}
-                                echo "⬇️  Pulling latest changes..."
-                                git pull origin ${GIT_BRANCH}
-                                echo "✅ Branch : \$(git branch --show-current)"
-                                echo "📝 Commit : \$(git log -1 --oneline)"
-                            '
-                    """
-                }
-            }
-        }
+                                DEST="${DEMO_PATH}/${env.DEST_JAR_NAME}"
 
-        // ─────────────────────────────────────────────────────────────────
-        // STAGE 5 — Maven Build
-        // Sets version dynamically via versions:set before building
-        // ─────────────────────────────────────────────────────────────────
-        stage('Build: Maven Clean Install') {
-            steps {
-                echo "🔨 Building version: ${env.MVN_VERSION}..."
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: "${SSH_CRED_ID}",
-                    keyFileVariable: 'SSH_KEY_FILE',
-                    usernameVariable: 'SSH_USER'
-                )]) {
-                    sh """
-                        chmod 600 \$SSH_KEY_FILE
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
-                            -o BatchMode=yes \\
-                            ${REMOTE_USER}@${REMOTE_HOST} '
-                                cd ${REMOTE_PATH} || { echo "❌ Directory not found: ${REMOTE_PATH}"; exit 1; }
+                                if [ -f "\${DEST}" ]; then
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                    echo "✅ Artifact verified!"
+                                    echo "📦 File    : \${DEST}"
+                                    echo "📏 Size    : \$(du -sh \${DEST} | cut -f1)"
+                                    echo "🕐 Modified: \$(stat -c %y \${DEST})"
+                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                else
+                                    echo "❌ Artifact NOT found at: \${DEST}"
+                                    exit 1
+                                fi
 
-                                echo "🔖 Stamping version: ${env.MVN_VERSION}"
-                                mvn versions:set \
-                                    -DnewVersion=${env.MVN_VERSION} \
-                                    -DgenerateBackupPoms=false \
-                                    -DNEXUS_URL=${NEXUS_BASE_URL} \
-                                    -DNEXUS_ENV=${env.NEXUS_ENV}
-
-                                echo "🔨 Running mvn clean install..."
-                                mvn clean install \
-                                    -DskipTests=false \
-                                    -DNEXUS_URL=${NEXUS_BASE_URL} \
-                                    -DNEXUS_ENV=${env.NEXUS_ENV}
-
-                                echo "✅ Build complete — version: ${env.MVN_VERSION}"
-                            '
-                    """
-                }
-            }
-        }
-
-        // ─────────────────────────────────────────────────────────────────
-        // STAGE 6 — Maven Deploy → Nexus
-        // Pushes artifact to the correct repo based on LABEL
-        // ─────────────────────────────────────────────────────────────────
-        stage('Deploy: Maven Clean Deploy → Nexus') {
-            steps {
-                echo "🚀 Deploying ${env.MVN_VERSION} → ${env.NEXUS_REPO_ID}..."
-                withCredentials([sshUserPrivateKey(
-                    credentialsId: "${SSH_CRED_ID}",
-                    keyFileVariable: 'SSH_KEY_FILE',
-                    usernameVariable: 'SSH_USER'
-                )]) {
-                    sh """
-                        chmod 600 \$SSH_KEY_FILE
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
-                            -o BatchMode=yes \\
-                            ${REMOTE_USER}@${REMOTE_HOST} '
-                                cd ${REMOTE_PATH} || { echo "❌ Directory not found: ${REMOTE_PATH}"; exit 1; }
-
-                                echo "🚀 Deploying to Nexus..."
-                                echo "   Label    : ${params.LABEL}"
-                                echo "   Version  : ${env.MVN_VERSION}"
-                                echo "   Repo     : ${env.NEXUS_REPO_ID}"
-                                echo "   Nexus URL: ${NEXUS_BASE_URL}/buymyverse-maven-${env.NEXUS_ENV}/"
-
-                                source .env
-
-                                mvn deploy \
-                                    -DskipTests=true \
-                                    -DNEXUS_URL=${NEXUS_BASE_URL} \
-                                    -DNEXUS_ENV=${env.NEXUS_ENV}
-
-                                echo "✅ Successfully deployed to: ${env.NEXUS_REPO_ID}"
-                                echo "📦 Artifact: com.buymyverse:product-service:${env.MVN_VERSION}"
+                                echo ""
+                                echo "📂 Full Demo Environment:"
+                                ls -lah ${DEMO_PATH}
                             '
                     """
                 }
@@ -279,19 +302,20 @@ pipeline {
         success {
             echo """
             ╔══════════════════════════════════════════╗
-            ║           ✅ PIPELINE SUCCESS             ║
+            ║         ✅ DOWNLOAD SUCCESS               ║
             ╠══════════════════════════════════════════╣
             ║  LABEL   : ${params.LABEL}
             ║  VERSION : ${env.MVN_VERSION}
-            ║  REPO    : ${env.NEXUS_REPO_ID}
-            ║  URL     : ${NEXUS_BASE_URL}/buymyverse-maven-${env.NEXUS_ENV}/
+            ║  REPO    : ${env.NEXUS_REPO}
+            ║  JAR     : ${env.DEST_JAR_NAME}
+            ║  DEST    : ${DEMO_PATH}
             ╚══════════════════════════════════════════╝
             """
         }
         failure {
             echo """
             ╔══════════════════════════════════════════╗
-            ║           ❌ PIPELINE FAILED              ║
+            ║         ❌ DOWNLOAD FAILED                ║
             ╠══════════════════════════════════════════╣
             ║  LABEL   : ${params.LABEL}
             ║  VERSION : ${params.VERSION}
