@@ -1,18 +1,16 @@
 pipeline {
 
-    // ── Use the existing pod template configured in Jenkins UI ───────────────
-    // Manage Jenkins → Clouds → Kubernetes → Pod Templates → jenkins-agent
     agent {
         kubernetes {
-            inheritFrom 'jenkins-agent'   // ← matches the Name field in your Pod template settings
-            defaultContainer 'jenkins-agent'
+            inheritFrom 'jenkins-agent'
+            defaultContainer 'jnlp'  
         }
     }
 
     environment {
         REMOTE_HOST = "3.226.177.66"
         REMOTE_USER = "admin"
-        SSH_CRED_ID = "jenkins-agent-ssh-key"   // Jenkins credential ID
+        SSH_CRED_ID = "jenkins-agent-ssh-key"
     }
 
     options {
@@ -23,7 +21,6 @@ pipeline {
 
     stages {
 
-        // ── 1. Checkout ──────────────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 echo "📥 Checking out source inside EKS pod..."
@@ -31,7 +28,6 @@ pipeline {
             }
         }
 
-        // ── 2. SSH from pod into build VM & list home directory ───────────────
         stage('SSH: List Home Directory') {
             steps {
                 echo "🔐 Connecting from EKS pod → admin@3.226.177.66..."
@@ -65,7 +61,6 @@ pipeline {
         }
     }
 
-    // ── Pod is automatically deleted by Jenkins after this block ─────────────
     post {
         success { echo "✅ Done. EKS pod deleted automatically." }
         failure  { echo "❌ Pipeline failed. EKS pod still cleaned up." }
