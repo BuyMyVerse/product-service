@@ -6,7 +6,7 @@ pipeline {
         ECR_REGISTRY    = '909783398453.dkr.ecr.us-east-1.amazonaws.com'
         ECR_REPO        = 'buymyverse/product-service'
         IMAGE_TAG       = "build-${env.BUILD_NUMBER}"
-        
+
         AWS_ACCESS_KEY  = credentials('aws-access-key-id')
         AWS_SECRET_KEY  = credentials('aws-secret-access-key')
         TEAMS_URL       = credentials('jenkins-cicd-webhook-url')
