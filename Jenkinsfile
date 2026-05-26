@@ -2,273 +2,158 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION      = 'us-east-1'
-        ECR_REGISTRY    = '909783398453.dkr.ecr.us-east-1.amazonaws.com'
-        ECR_REPO        = 'buymyverse/product-service'
-        
-        AWS_ACCESS_KEY  = credentials('aws-access-key-id')
-        AWS_SECRET_KEY  = credentials('aws-secret-access-key')
-        TEAMS_URL       = credentials('jenkins-cicd-webhook-url')
+        // ─── Docker / Registry ───────────────────────────────────────────────
+        DOCKER_IMAGE      = "product-service"
+        DOCKER_TAG        = "${BUILD_NUMBER}"
+        DOCKER_REGISTRY   = "your-dockerhub-username"          // ← change this
+        FULL_IMAGE        = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
 
-        REPO_URL        = 'https://github.com/BuyMyVerse/product-service'
-        BUILDER_HOST    = '3.226.177.66'
-        BUILDER_USER    = 'admin'
-        PROJECT_DIR     = '/home/admin/Jenkins-deployment/product-service'
-        K8S_NAMESPACE   = 'buymyverse-dev'
-        K8S_DEPLOYMENT  = 'product-service'
-        K8S_CONTAINER   = 'product-service'
+        // ─── Remote Server ────────────────────────────────────────────────────
+        REMOTE_HOST       = "3.226.177.66"        // ← change this
+        REMOTE_USER       = "admin"                            // ← change this
+        SSH_CRED_ID       = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1pJOF0xaB97eEgZkMxO0PagPTmEMqt9UZDhS+FM5M0 admin@ip-12-0-1-185"            // Jenkins credential ID (SSH Username with private key)
+
+        // ─── Container / App ──────────────────────────────────────────────────
+        CONTAINER_NAME    = "product-service-container"
+        APP_PORT          = "8080"
+        HOST_PORT         = "8080"
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        disableConcurrentBuilds()
         timestamps()
+        timeout(time: 30, unit: 'MINUTES')
     }
 
     stages {
 
-        stage('Prepare Metadata') {
+        // ── 1. Checkout ────────────────────────────────────────────────────────
+        stage('Checkout') {
             steps {
-                script {
-                    env.COMMITTED_BY = sh(
-                        script: 'git log -1 --pretty=format:"%an"',
-                        returnStdout: true
-                    ).trim()
+                echo "📥 Checking out source from Jenkins branch..."
+                checkout scm
+            }
+        }
 
-                    env.COMMIT_MSG = sh(
-                        script: 'git log -1 --pretty=format:"%s"',
-                        returnStdout: true
-                    ).trim()
+        // ── 2. Build JAR ───────────────────────────────────────────────────────
+        stage('Build JAR') {
+            steps {
+                echo "🔨 Building Spring Boot JAR with Maven..."
+                sh '''
+                    mvn clean package -DskipTests \
+                        --no-transfer-progress \
+                        -f pom.xml
+                '''
+            }
+            post {
+                success { echo "✅ JAR build successful." }
+                failure { error "❌ Maven build failed. Stopping pipeline." }
+            }
+        }
 
-                    env.SOURCE_BRANCH = sh(
-                        script: 'git log -1 --merges --pretty=format:"%s" | grep -oP "Merge pull request #\\d+ from \\K\\S+" || echo "${BRANCH_NAME}"',
-                        returnStdout: true
-                    ).trim()
+        // ── 3. Build Docker Image ──────────────────────────────────────────────
+        stage('Build Docker Image') {
+            steps {
+                echo "🐳 Building Docker image: ${FULL_IMAGE}"
+                sh "docker build -t ${FULL_IMAGE} ."
+            }
+        }
 
-                    env.JOB_SHORT = env.JOB_NAME.tokenize('/').size() > 1 ?
-                        env.JOB_NAME.tokenize('/')[1] :
-                        env.JOB_NAME
-
-                    env.PR_NUMBER = sh(
-                        script: '''
-                            git log -1 --pretty=format:"%s" | grep -oP "(?:Merge pull request #|\\(#)\\K\\d+" | head -1 || \
-                            git log --merges --pretty=format:"%s" -10 | grep -oP "Merge pull request #\\K\\d+" | head -1 || \
-                            echo ""
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    env.COMMIT_HASH = sh(
-                        script: 'git log -1 --pretty=format:"%H"',
-                        returnStdout: true
-                    ).trim()
-
-                    def prNum = env.PR_NUMBER?.trim()
-                    if (env.CHANGE_URL) {
-                        env.PR_URL = env.CHANGE_URL
-                    } else if (prNum && prNum != '' && prNum != 'null') {
-                        env.PR_URL = "${env.REPO_URL}/pull/${prNum}"
-                    } else {
-                        env.PR_URL = "${env.REPO_URL}/tree/${env.BRANCH_NAME}"
-                    }
-
-                    env.ACTUAL_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
-
-                    env.IMAGE_TAG = "qa-" + new Date().format("yyyy-MM-dd-HH-mm-ss")
-
-                    echo "============================================="
-                    echo "COMMITTED_BY  : ${env.COMMITTED_BY}"
-                    echo "SOURCE_BRANCH : ${env.SOURCE_BRANCH}"
-                    echo "ACTUAL_BRANCH : ${env.ACTUAL_BRANCH}"
-                    echo "COMMIT_MSG    : ${env.COMMIT_MSG}"
-                    echo "PR_NUMBER     : ${env.PR_NUMBER}"
-                    echo "COMMIT_HASH   : ${env.COMMIT_HASH}"
-                    echo "PR_URL        : ${env.PR_URL}"
-                    echo "IMAGE_TAG     : ${env.IMAGE_TAG}"
-                    echo "=============================================="
+        // ── 4. Push to Registry ────────────────────────────────────────────────
+        stage('Push Docker Image') {
+            steps {
+                echo "📤 Pushing Docker image to registry..."
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-credentials',   // ← Jenkins credential ID for Docker Hub
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${FULL_IMAGE}
+                        docker logout
+                    '''
                 }
             }
         }
 
-        stage('Deployment Notification') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
+        // ── 5. Deploy on Remote Server via SSH ─────────────────────────────────
+        stage('Deploy to Server') {
             steps {
-                echo 'Sending Deployment Started Notification...'
-                sh """
-                    curl -s -X POST "${TEAMS_URL}" \\
-                    -H "Content-Type: application/json" \\
-                    -d '{
-                        "status": "started",
-                        "job": "${env.JOB_SHORT}",
-                        "environment": "QA",
-                        "branch": "${env.SOURCE_BRANCH}",
-                        "committed_by": "${env.COMMITTED_BY}",
-                        "commit_message": "${env.COMMIT_MSG}",
-                        "pr_url": "${env.PR_URL}",
-                        "image_tag": "${env.IMAGE_TAG}"
-                    }'
-                """
-            }
-        }
-
-        stage('SSH Connection Test') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Testing SSH Connection to Builder VM...'
-                sshagent(['buymyverse-ec2-key']) {
+                echo "🚀 Connecting to ${REMOTE_HOST} via SSH and deploying..."
+                sshagent(credentials: ["${SSH_CRED_ID}"]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            echo "Connected to: "\$(hostname)
-                            echo "IP: "\$(hostname -I)
-                            echo "Maven: "\$(/usr/bin/mvn -version 2>&1 | head -1)
-                            echo "Docker: "\$(/usr/bin/docker --version)
-                            echo "AWS: "\$(/usr/bin/aws --version)
-                            echo "Java: "\$(java -version 2>&1 | head -1)
+                        ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} '
+
+                            echo "=== Pulling latest image ==="
+                            docker pull ${FULL_IMAGE}
+
+                            echo "=== Stopping and removing old container (if any) ==="
+                            docker stop ${CONTAINER_NAME} 2>/dev/null || true
+                            docker rm   ${CONTAINER_NAME} 2>/dev/null || true
+
+                            echo "=== Starting new container ==="
+                            docker run -d \\
+                                --name ${CONTAINER_NAME} \\
+                                --restart unless-stopped \\
+                                -p ${HOST_PORT}:${APP_PORT} \\
+                                ${FULL_IMAGE}
+
+                            echo "=== Container status ==="
+                            docker ps --filter name=${CONTAINER_NAME}
+
+                        '
+                    """
+                }
+            }
+            post {
+                success { echo "✅ Deployment successful on ${REMOTE_HOST}." }
+                failure { error "❌ Deployment failed on remote server." }
+            }
+        }
+
+        // ── 6. Health Check ────────────────────────────────────────────────────
+        stage('Health Check') {
+            steps {
+                echo "🩺 Waiting for application to be healthy..."
+                sshagent(credentials: ["${SSH_CRED_ID}"]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} '
+                            for i in \$(seq 1 12); do
+                                STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${APP_PORT}/actuator/health 2>/dev/null || echo "000")
+                                echo "Attempt \$i: HTTP \$STATUS"
+                                if [ "\$STATUS" = "200" ]; then
+                                    echo "✅ Application is healthy!"
+                                    exit 0
+                                fi
+                                sleep 5
+                            done
+                            echo "❌ Health check timed out."
+                            exit 1
                         '
                     """
                 }
             }
         }
 
-        stage('Git Pull on Builder') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
+        // ── 7. Post-Deploy Cleanup on Server ───────────────────────────────────
+        stage('Cleanup: Remove Old Images on Server') {
             steps {
-                echo 'Pulling latest code on Builder VM...'
-                sshagent(['buymyverse-ec2-key']) {
+                echo "🧹 Removing dangling and old images from remote server..."
+                sshagent(credentials: ["${SSH_CRED_ID}"]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            set -e
-                            cd ${PROJECT_DIR}
-                            git fetch --all
-                            git checkout qa
-                            git pull origin qa
-                        '
-                    """
-                }
-            }
-        }
+                        ssh -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST} '
 
-        stage('Build Maven Project') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Building Maven Project on Builder VM...'
-                sshagent(['buymyverse-ec2-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            set -e
-                            cd ${PROJECT_DIR}
-                            /usr/bin/mvn clean install -DskipTests
-                        '
-                    """
-                }
-            }
-        }
+                            echo "=== Pruning unused Docker images ==="
+                            docker image prune -f
 
-        stage('Docker Build') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Building Docker Image on Builder VM...'
-                sshagent(['buymyverse-ec2-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            set -e
-                            cd ${PROJECT_DIR}
-                            /usr/bin/docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} .
-                            /usr/bin/docker tag ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} ${ECR_REGISTRY}/${ECR_REPO}:latest
-                            curl ifconfig.io
-                        '
-                    """
-                }
-            }
-        }
+                            echo "=== Removing previous image tags for this service ==="
+                            docker images ${DOCKER_REGISTRY}/${DOCKER_IMAGE} \
+                                --format "{{.Tag}} {{.ID}}" | \
+                            awk -v keep="${DOCKER_TAG}" \'\$1 != keep {print \$2}\' | \
+                            xargs -r docker rmi -f 2>/dev/null || true
 
-        stage('Push to ECR') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Pushing Docker Image to ECR from Builder VM...'
-                sshagent(['buymyverse-ec2-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            set -e
-                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY}
-                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_KEY}
-                            /usr/bin/aws ecr get-login-password --region ${AWS_REGION} | \
-                            /usr/bin/docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                            /usr/bin/docker push ${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG}
-                            /usr/bin/docker push ${ECR_REGISTRY}/${ECR_REPO}:latest
-                        '
-                    """
-                }
-                script {
-                    env.DOCKER_IMAGE = "${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG}"
-                }
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                echo 'Updating Kubernetes Deployment with new image...'
-                sshagent(['buymyverse-ec2-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            set -e
-                            kubectl set image deployment/${K8S_DEPLOYMENT} \
-                                ${K8S_CONTAINER}=${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} \
-                                -n ${K8S_NAMESPACE}
-                        '
-                    """
-                }
-            }
-        }
-
-        stage('Check Pods') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
-            steps {
-                sshagent(['buymyverse-ec2-key']) {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
-                            kubectl get pods -n ${K8S_NAMESPACE}
+                            echo "✅ Cleanup complete on server."
                         '
                     """
                 }
@@ -276,56 +161,21 @@ pipeline {
         }
     }
 
+    // ── Post-Pipeline: Cleanup Jenkins Agent ──────────────────────────────────
     post {
-        success {
-            script {
-                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {
-                    sh """
-                        curl -s -X POST "${TEAMS_URL}" \\
-                        -H "Content-Type: application/json" \\
-                        -d '{
-                            "status": "ended",
-                            "job": "${env.JOB_SHORT}",
-                            "environment": "QA",
-                            "branch": "${env.SOURCE_BRANCH}",
-                            "committed_by": "${env.COMMITTED_BY}",
-                            "commit_message": "${env.COMMIT_MSG}",
-                            "pr_url": "${env.PR_URL}",
-                            "image_tag": "${env.IMAGE_TAG}",
-                            "docker_image": "${env.DOCKER_IMAGE}",
-                            "result": "SUCCESS"
-                        }'
-                    """
-                }
-            }
-            echo 'Pipeline completed successfully!'
-        }
-
-        failure {
-            script {
-                if (env.BRANCH_NAME == 'qa' && !env.CHANGE_ID) {
-                    sh """
-                        curl -s -X POST "${TEAMS_URL}" \\
-                        -H "Content-Type: application/json" \\
-                        -d '{
-                            "status": "ended",
-                            "job": "${env.JOB_SHORT}",
-                            "environment": "QA",
-                            "branch": "${env.SOURCE_BRANCH}",
-                            "committed_by": "${env.COMMITTED_BY}",
-                            "commit_message": "${env.COMMIT_MSG}",
-                            "pr_url": "${env.PR_URL}",
-                            "image_tag": "${env.IMAGE_TAG}",
-                            "result": "FAILED"
-                        }'
-                    """
-                }
-            }
-            echo 'Pipeline failed!'
-        }
-
         always {
+            echo "🧹 Cleaning up Jenkins workspace and local Docker image..."
+            sh '''
+                docker rmi ${FULL_IMAGE} 2>/dev/null || true
+                docker image prune -f   2>/dev/null || true
+            '''
             cleanWs()
+        }
+        success {
+            echo "🎉 Pipeline completed successfully! Image: ${FULL_IMAGE}"
+        }
+        failure {
+            echo "🔥 Pipeline failed. Check logs above for details."
         }
     }
 }
