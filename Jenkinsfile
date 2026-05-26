@@ -10,12 +10,17 @@ pipeline {
         choice(
             name: 'LABEL',
             choices: ['QA', 'Beta', 'Release'],
-            description: 'Select build type to download from Nexus'
+            description: '''Select build type:
+  QA      → downloads 1.0.0-SNAPSHOT from buymyverse-maven-dev
+  Beta    → downloads 1.0.0-BETA     from buymyverse-maven-beta
+  Release → downloads 1.0.0          from buymyverse-maven-prod'''
         )
         string(
             name: 'VERSION',
-            defaultValue: '',
-            description: 'Enter the version to download (Example: 1.0.0)'
+            defaultValue: '1.0.0',
+            description: '''Base version number only — DO NOT add suffixes.
+  ✅ Correct : 1.0.0
+  ❌ Wrong   : 1.0.0-SNAPSHOT  or  1.0.0-BETA'''
         )
     }
 
@@ -52,7 +57,7 @@ pipeline {
                         error("❌ VERSION is required! Example: 1.0.0")
                     }
                     if (!(params.VERSION ==~ /^\d+\.\d+\.\d+$/)) {
-                        error("❌ VERSION must follow semver: MAJOR.MINOR.PATCH (e.g. 1.0.0)")
+                        error("❌ VERSION must follow semver: MAJOR.MINOR.PATCH (e.g. 1.0.0) — DO NOT add -SNAPSHOT or -BETA suffix")
                     }
 
                     switch (params.LABEL) {
@@ -91,6 +96,7 @@ pipeline {
                     ║  NEXUS_REPO : ${env.NEXUS_REPO}
                     ║  IS_SNAPSHOT: ${env.IS_SNAPSHOT}
                     ║  ARTIFACT   : ${env.DEST_JAR_NAME}
+                    ║  NEXUS_URL  : ${env.NEXUS_ARTIFACT_URL}
                     ║  DEST_PATH  : ${DEMO_PATH}
                     ╚══════════════════════════════════════════╝
                     """
@@ -125,11 +131,11 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 2 — Prepare Demo Environment Directory
+        // STAGE 2 — Clean & Prepare Demo Environment Directory
         // ─────────────────────────────────────────────────────────────────
-        stage('Prepare: Demo Environment Directory') {
+        stage('Prepare: Clean & Create Demo Directory') {
             steps {
-                echo "📂 Preparing ${DEMO_PATH}..."
+                echo "🗑️  Cleaning and preparing ${DEMO_PATH}..."
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -141,9 +147,18 @@ pipeline {
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
+                                echo "🗑️  Wiping Demo Environment folder..."
+                                rm -rf ${DEMO_PATH}
                                 mkdir -p ${DEMO_PATH}
-                                echo "✅ Directory ready: ${DEMO_PATH}"
-                                echo "📂 Current contents:"
+                                echo "✅ Folder cleaned and recreated: ${DEMO_PATH}"
+
+                                echo ""
+                                echo "🗑️  Wiping .m2 cache for ${ARTIFACT_ID}..."
+                                rm -rf \$HOME/.m2/repository/com/buymyverse/${ARTIFACT_ID}/
+                                echo "✅ .m2 cache cleared"
+
+                                echo ""
+                                echo "📂 Demo Environment ready:"
                                 ls -lah ${DEMO_PATH}
                             '
                     """
@@ -152,11 +167,12 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 3 — Download Artifact from Nexus
-        // Beta/Release → direct curl (exact filename known)
+        // STAGE 3 — Download All Artifact Files from Nexus
+        // Downloads: .jar .jar.md5 .jar.sha1 .pom .pom.md5 .pom.sha1
         // QA/SNAPSHOT  → parse maven-metadata.xml → get latest timestamp
+        // Beta/Release → direct curl (exact filename known)
         // ─────────────────────────────────────────────────────────────────
-        stage('Download: Pull Artifact from Nexus') {
+        stage('Download: Pull All Artifact Files from Nexus') {
             steps {
                 echo "⬇️  Downloading ${env.MVN_VERSION} from ${env.NEXUS_REPO}..."
                 withCredentials([sshUserPrivateKey(
@@ -177,23 +193,22 @@ pipeline {
                             NEXUS_PASS="${NEXUS_PASS}"
                             NEXUS_ARTIFACT_URL="${env.NEXUS_ARTIFACT_URL}"
                             IS_SNAPSHOT="${env.IS_SNAPSHOT}"
-                            DEST_JAR_NAME="${env.DEST_JAR_NAME}"
                             DEMO_PATH="${DEMO_PATH}"
                             ARTIFACT_ID="${ARTIFACT_ID}"
                             MVN_VERSION="${env.MVN_VERSION}"
 
                             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                            echo "⬇️  Artifact URL base : \${NEXUS_ARTIFACT_URL}"
-                            echo "📦 Target jar        : \${DEST_JAR_NAME}"
-                            echo "📂 Destination       : \${DEMO_PATH}"
+                            echo "⬇️  Artifact URL : \${NEXUS_ARTIFACT_URL}"
+                            echo "📦 Version      : \${MVN_VERSION}"
+                            echo "📂 Destination  : \${DEMO_PATH}"
                             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+                            # ── Resolve base filename ──────────────────────────────────
                             if [ "\${IS_SNAPSHOT}" = "true" ]; then
-
-                                # ── SNAPSHOT: resolve latest timestamped jar via metadata ──
-                                echo "🔍 SNAPSHOT detected — resolving latest timestamp..."
+                                echo ""
+                                echo "🔍 SNAPSHOT — resolving latest timestamp from metadata..."
                                 METADATA_URL="\${NEXUS_ARTIFACT_URL}/maven-metadata.xml"
-                                echo "📄 Fetching metadata: \${METADATA_URL}"
+                                echo "📄 Fetching: \${METADATA_URL}"
 
                                 METADATA=\$(curl -sf -u "\${NEXUS_USER}:\${NEXUS_PASS}" "\${METADATA_URL}")
 
@@ -204,7 +219,7 @@ pipeline {
 
                                 echo "\${METADATA}"
 
-                                # Extract latest snapshot value (e.g. 1.0.0-20260526.183249-6)
+                                # Extract latest timestamped version e.g. 1.0.0-20260526.183249-6
                                 SNAPSHOT_VERSION=\$(echo "\${METADATA}" | grep -o '<value>[^<]*</value>' | tail -1 | sed 's/<[^>]*>//g')
 
                                 if [ -z "\${SNAPSHOT_VERSION}" ]; then
@@ -212,38 +227,47 @@ pipeline {
                                     exit 1
                                 fi
 
-                                echo "✅ Latest snapshot  : \${SNAPSHOT_VERSION}"
-                                JAR_FILENAME="\${ARTIFACT_ID}-\${SNAPSHOT_VERSION}.jar"
-                                DOWNLOAD_URL="\${NEXUS_ARTIFACT_URL}/\${JAR_FILENAME}"
-
+                                echo "✅ Latest snapshot version: \${SNAPSHOT_VERSION}"
+                                BASE_FILENAME="\${ARTIFACT_ID}-\${SNAPSHOT_VERSION}"
                             else
-
-                                # ── Beta / Release: exact filename directly ─────────────
-                                JAR_FILENAME="\${DEST_JAR_NAME}"
-                                DOWNLOAD_URL="\${NEXUS_ARTIFACT_URL}/\${JAR_FILENAME}"
-
+                                BASE_FILENAME="\${ARTIFACT_ID}-\${MVN_VERSION}"
                             fi
 
                             echo ""
-                            echo "🌐 Download URL : \${DOWNLOAD_URL}"
-                            echo "💾 Save as      : \${DEMO_PATH}/\${DEST_JAR_NAME}"
+                            echo "📦 Base filename resolved: \${BASE_FILENAME}"
                             echo ""
+                            echo "⬇️  Downloading all artifact files..."
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-                            # ── Clean old jars from demo folder ────────────────────────
-                            echo "🧹 Cleaning old \${ARTIFACT_ID} jars from \${DEMO_PATH}..."
-                            rm -f \${DEMO_PATH}/\${ARTIFACT_ID}-*.jar
-                            echo "✅ Old jars removed"
+                            # ── Download all 6 files ───────────────────────────────────
+                            for EXT in jar jar.md5 jar.sha1 pom pom.md5 pom.sha1; do
 
-                            # ── Download from Nexus ────────────────────────────────────
-                            echo "⬇️  Downloading now..."
-                            curl -f \\
-                                --progress-bar \\
-                                -u "\${NEXUS_USER}:\${NEXUS_PASS}" \\
-                                -o "\${DEMO_PATH}/\${DEST_JAR_NAME}" \\
-                                "\${DOWNLOAD_URL}"
+                                SRC_FILE="\${BASE_FILENAME}.\${EXT}"
+                                DOWNLOAD_URL="\${NEXUS_ARTIFACT_URL}/\${SRC_FILE}"
 
-                            echo ""
-                            echo "✅ Download complete!"
+                                # For SNAPSHOT: save with clean MVN_VERSION name
+                                if [ "\${IS_SNAPSHOT}" = "true" ]; then
+                                    DEST_FILE="\${ARTIFACT_ID}-\${MVN_VERSION}.\${EXT}"
+                                else
+                                    DEST_FILE="\${SRC_FILE}"
+                                fi
+
+                                echo "⬇️  Downloading : \${SRC_FILE}"
+                                echo "    → Saving as : \${DEST_FILE}"
+
+                                curl -f \\
+                                    --progress-bar \\
+                                    -u "\${NEXUS_USER}:\${NEXUS_PASS}" \\
+                                    -o "\${DEMO_PATH}/\${DEST_FILE}" \\
+                                    "\${DOWNLOAD_URL}" \\
+                                && echo "✅ Done     : \${DEST_FILE}" \\
+                                || echo "⚠️  Skipped  : \${SRC_FILE} (not found in Nexus)"
+
+                                echo ""
+                            done
+
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "✅ All files downloaded!"
                             echo ""
                             echo "📂 Demo Environment contents:"
                             ls -lah \${DEMO_PATH}
@@ -255,11 +279,11 @@ ENDSSH
         }
 
         // ─────────────────────────────────────────────────────────────────
-        // STAGE 4 — Verify Artifact in Demo Environment
+        // STAGE 4 — Verify All Files in Demo Environment
         // ─────────────────────────────────────────────────────────────────
         stage('Verify: Artifact in Demo Environment') {
             steps {
-                echo "🔍 Verifying artifact landed correctly..."
+                echo "🔍 Verifying all artifact files in ${DEMO_PATH}..."
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -271,23 +295,47 @@ ENDSSH
                             -o StrictHostKeyChecking=no \\
                             -o BatchMode=yes \\
                             ${REMOTE_USER}@${REMOTE_HOST} '
-                                DEST="${DEMO_PATH}/${env.DEST_JAR_NAME}"
+                                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                echo "📂 Demo Environment: ${DEMO_PATH}"
+                                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                ls -lah ${DEMO_PATH}
+                                echo ""
 
-                                if [ -f "\${DEST}" ]; then
-                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                                    echo "✅ Artifact verified!"
-                                    echo "📦 File    : \${DEST}"
-                                    echo "📏 Size    : \$(du -sh \${DEST} | cut -f1)"
-                                    echo "🕐 Modified: \$(stat -c %y \${DEST})"
-                                    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                # ── Verify JAR ─────────────────────────────────────────
+                                JAR_FILE=\$(find ${DEMO_PATH} -name "*.jar" ! -name "*sources*" ! -name "*javadoc*" | head -1)
+                                if [ -f "\${JAR_FILE}" ]; then
+                                    echo "✅ JAR     : \${JAR_FILE}"
+                                    echo "   Size    : \$(du -sh \${JAR_FILE} | cut -f1)"
+                                    echo "   Modified: \$(stat -c %y \${JAR_FILE})"
                                 else
-                                    echo "❌ Artifact NOT found at: \${DEST}"
+                                    echo "❌ JAR not found in ${DEMO_PATH}"
                                     exit 1
                                 fi
 
                                 echo ""
-                                echo "📂 Full Demo Environment:"
-                                ls -lah ${DEMO_PATH}
+
+                                # ── Verify POM ─────────────────────────────────────────
+                                POM_FILE=\$(find ${DEMO_PATH} -name "*.pom" | head -1)
+                                if [ -f "\${POM_FILE}" ]; then
+                                    echo "✅ POM     : \${POM_FILE}"
+                                    echo "   Size    : \$(du -sh \${POM_FILE} | cut -f1)"
+                                else
+                                    echo "❌ POM not found in ${DEMO_PATH}"
+                                    exit 1
+                                fi
+
+                                echo ""
+
+                                # ── Verify Checksums ───────────────────────────────────
+                                MD5_COUNT=\$(find ${DEMO_PATH} -name "*.md5" | wc -l)
+                                SHA1_COUNT=\$(find ${DEMO_PATH} -name "*.sha1" | wc -l)
+                                echo "✅ MD5  files : \${MD5_COUNT}"
+                                echo "✅ SHA1 files : \${SHA1_COUNT}"
+
+                                echo ""
+                                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                                echo "✅ All artifact files verified successfully!"
+                                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                             '
                     """
                 }
@@ -307,7 +355,8 @@ ENDSSH
             ║  LABEL   : ${params.LABEL}
             ║  VERSION : ${env.MVN_VERSION}
             ║  REPO    : ${env.NEXUS_REPO}
-            ║  JAR     : ${env.DEST_JAR_NAME}
+            ║  FILES   : jar, jar.md5, jar.sha1
+            ║            pom, pom.md5, pom.sha1
             ║  DEST    : ${DEMO_PATH}
             ╚══════════════════════════════════════════╝
             """
