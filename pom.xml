@@ -11,15 +11,73 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.demo</groupId>
-    <artifactId>api</artifactId>
-    <version>1.0.0</version>
-    <name>Spring Boot Demo API</name>
-    <description>Demo REST API with Users and Products endpoints</description>
+    <groupId>com.buymyverse</groupId>
+    <artifactId>product-service</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <name>BuyMyVerse Product Service</name>
+    <description>Product Service for BuyMyVerse platform</description>
 
     <properties>
         <java.version>17</java.version>
+        <checkstyle.config>checkstyle.xml</checkstyle.config>
+        <pmd.ruleset>pmd-ruleset.xml</pmd.ruleset>
+
+        <!-- ─────────────────────────────────────────────────────────
+             NEXUS URL — controlled by environment variable
+             Set in CI / shell before running mvn:
+
+               DEV:
+                 export NEXUS_URL=https://dev-artifacthub.evaequitymtest.com/repository
+                 export NEXUS_ENV=dev
+
+               PROD:
+                 export NEXUS_URL=https://dev-artifacthub.evaequitymtest.com/repository
+                 export NEXUS_ENV=prod
+
+             Or pass directly on the command line:
+               mvn clean deploy -DNEXUS_URL=https://... -DNEXUS_ENV=dev
+        ───────────────────────────────────────────────────────── -->
+        <NEXUS_URL>${env.NEXUS_URL}</NEXUS_URL>
+        <NEXUS_ENV>${env.NEXUS_ENV}</NEXUS_ENV>
     </properties>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         Distribution Management
+         Snapshot  (version ends -SNAPSHOT) → buymyverse-maven-dev
+         Release   (version is plain semver) → buymyverse-maven-prod
+         Both URLs are built from NEXUS_URL + NEXUS_ENV env variables
+    ───────────────────────────────────────────────────────────── -->
+    <distributionManagement>
+        <snapshotRepository>
+            <id>buymyverse-maven-dev</id>
+            <url>${NEXUS_URL}/buymyverse-maven-${NEXUS_ENV}/</url>
+        </snapshotRepository>
+        <repository>
+            <id>buymyverse-maven-prod</id>
+            <url>${NEXUS_URL}/buymyverse-maven-${NEXUS_ENV}/</url>
+        </repository>
+    </distributionManagement>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         Pull dependencies from Nexus group repo
+    ───────────────────────────────────────────────────────────── -->
+    <repositories>
+        <repository>
+            <id>buymyverse-maven-group</id>
+            <url>${NEXUS_URL}/buymyverse-maven-group/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+    </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>buymyverse-maven-group</id>
+            <url>${NEXUS_URL}/buymyverse-maven-group/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+    </pluginRepositories>
 
     <dependencies>
         <dependency>
@@ -44,13 +102,76 @@
 
     <build>
         <plugins>
+
+            <!-- Spring Boot -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <finalName>demo-api</finalName>
+                    <finalName>product-service</finalName>
                 </configuration>
             </plugin>
+
+            <!-- Checkstyle — runs via: mvn checkstyle:check -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
+                <version>3.3.1</version>
+                <configuration>
+                    <configLocation>${checkstyle.config}</configLocation>
+                    <failsOnError>true</failsOnError>
+                    <consoleOutput>true</consoleOutput>
+                    <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                </configuration>
+            </plugin>
+
+            <!-- PMD — runs via: mvn pmd:check -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-pmd-plugin</artifactId>
+                <version>3.21.2</version>
+                <configuration>
+                    <rulesets>
+                        <ruleset>${pmd.ruleset}</ruleset>
+                    </rulesets>
+                    <failOnViolation>true</failOnViolation>
+                    <printFailingErrors>true</printFailingErrors>
+                    <linkXRef>false</linkXRef>
+                    <minimumTokens>100</minimumTokens>
+                </configuration>
+            </plugin>
+
+            <!-- SpotBugs — runs via: mvn com.github.spotbugs:spotbugs-maven-plugin:4.8.3.0:check -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>4.8.3.0</version>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Medium</threshold>
+                    <failOnError>true</failOnError>
+                    <xmlOutput>true</xmlOutput>
+                </configuration>
+            </plugin>
+
+            <!-- JaCoCo — test coverage report -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <execution>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>test</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
         </plugins>
     </build>
+
 </project>
