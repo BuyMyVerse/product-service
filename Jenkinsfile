@@ -14,6 +14,9 @@ pipeline {
         BUILDER_HOST    = '3.226.177.66'
         BUILDER_USER    = 'admin'
         PROJECT_DIR     = '/home/admin/Jenkins-deployment/product-service'
+        K8S_NAMESPACE   = 'buymyverse-dev'
+        K8S_DEPLOYMENT  = 'product-service'
+        K8S_CONTAINER   = 'product-service'
     }
 
     options {
@@ -71,7 +74,6 @@ pipeline {
 
                     env.ACTUAL_BRANCH = env.CHANGE_BRANCH ?: env.BRANCH_NAME
 
-                    // ✅ QA timestamp-based image tag
                     env.IMAGE_TAG = "qa-" + new Date().format("yyyy-MM-dd-HH-mm-ss")
 
                     echo "============================================="
@@ -233,6 +235,30 @@ pipeline {
             }
         }
 
+        stage('Deploy to Kubernetes') {
+            when {
+                allOf {
+                    not { changeRequest() }
+                    branch 'qa'
+                }
+            }
+            steps {
+                echo 'Updating Kubernetes Deployment with new image...'
+                sshagent(['buymyverse-ec2-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
+                            set -e
+                            kubectl set image deployment/${K8S_DEPLOYMENT} \
+                                ${K8S_CONTAINER}=${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} \
+                                -n ${K8S_NAMESPACE}
+                            kubectl rollout status deployment/${K8S_DEPLOYMENT} \
+                                -n ${K8S_NAMESPACE} --timeout=120s
+                        '
+                    """
+                }
+            }
+        }
+
         stage('Check Pods') {
             when {
                 allOf {
@@ -242,9 +268,11 @@ pipeline {
             }
             steps {
                 sshagent(['buymyverse-ec2-key']) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no admin@3.226.177.66 "kubectl get pods -A"
-                    '''
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${BUILDER_USER}@${BUILDER_HOST} '
+                            kubectl get pods -n ${K8S_NAMESPACE}
+                        '
+                    """
                 }
             }
         }
