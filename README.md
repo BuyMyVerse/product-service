@@ -8,7 +8,7 @@ A simple Spring Boot 3 REST API (Java 17) with in-memory sample data — no data
 
 ```
 springboot-demo/ 
-├── src/
+├── src/ 
 │   └── main/
 │       ├── java/com/demo/api/
 │       │   ├── DemoApiApplication.java
