@@ -10,7 +10,7 @@ pipeline {
         REMOTE_USER = "admin"
         SSH_CRED_ID = "jenkins-agent-ssh-key"
         REMOTE_PATH = "/home/admin/Jenkins-deployment/QA-Artifact-Push/product-service"
-        GIT_BRANCH = "qa"
+        GIT_BRANCH = "Push-Artifact"
     }
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
