@@ -11,14 +11,18 @@ pipeline {
         REMOTE_USER   = "admin"
         SSH_CRED_ID   = "jenkins-agent-ssh-key"
         PROJECT_PATH  = "/home/admin/Jenkins-deployment/product-service"
+        BRANCH_NAME   = "Jenkins"
 
         NEXUS_HOST    = "dev-artifacthub.evaequitymtest.com"
         NEXUS_REPO    = "buymyverse-docker-dev"
         IMAGE_NAME    = "product-service"
-        // Tag generated once and reused across all stages
         IMAGE_TAG     = "dev-${new Date().format('yyyy-MM-dd-HH-mm-ss')}"
         FULL_IMAGE    = "${NEXUS_HOST}/${NEXUS_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
         NEXUS_CRED_ID = "nexus-credentials"
+
+        K8S_NAMESPACE  = "buymyverse-dev"
+        K8S_DEPLOYMENT = "product-service"
+        K8S_CONTAINER  = "product-service"
     }
 
     options {
@@ -37,11 +41,11 @@ pipeline {
                 echo "========================================================"
                 echo "  Job        : ${JOB_NAME}"
                 echo "  Build No   : #${BUILD_NUMBER}"
-                echo "  Branch     : ${GIT_BRANCH}"
+                echo "  Branch     : ${BRANCH_NAME}"
                 echo "  Image Tag  : ${IMAGE_TAG}"
                 echo "  Full Image : ${FULL_IMAGE}"
                 echo "  Target VM  : ${REMOTE_USER}@${REMOTE_HOST}"
-                echo "  Source     : ${PROJECT_PATH}"
+                echo "  EKS NS     : ${K8S_NAMESPACE}"
                 echo "  Started At : ${new Date()}"
                 echo "========================================================"
             }
@@ -50,7 +54,7 @@ pipeline {
         // ── Stage 2: Git Checkout on VM ───────────────────────────────────────
         stage('Git Checkout') {
             steps {
-                echo "📥 Pulling latest code on VM: branch ${GIT_BRANCH}"
+                echo "📥 Pulling latest: branch ${BRANCH_NAME}"
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -58,14 +62,13 @@ pipeline {
                 )]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
+                        ssh -i \$SSH_KEY_FILE -o StrictHostKeyChecking=no \\
                             ${REMOTE_USER}@${REMOTE_HOST} bash -e << 'ENDSSH'
-                            echo "=== Git Pull ==="
                             cd ${PROJECT_PATH}
+                            echo "=== Git Pull ==="
                             git fetch --all
-                            git checkout ${GIT_BRANCH}
-                            git pull origin ${GIT_BRANCH}
+                            git checkout ${BRANCH_NAME}
+                            git pull origin ${BRANCH_NAME}
                             echo "Branch  : \$(git branch --show-current)"
                             echo "Commit  : \$(git rev-parse --short HEAD)"
                             echo "Message : \$(git log -1 --pretty=%B)"
@@ -86,15 +89,12 @@ ENDSSH
                 )]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
+                        ssh -i \$SSH_KEY_FILE -o StrictHostKeyChecking=no \\
                             ${REMOTE_USER}@${REMOTE_HOST} bash -e << 'ENDSSH'
-                            echo "=== Docker Build ==="
                             cd ${PROJECT_PATH}
-                            echo "Building from: \$(pwd)"
-                            echo "Dockerfile exists: \$(ls Dockerfile)"
-                            docker build -t ${FULL_IMAGE} .
-                            echo "=== Verify image exists ==="
+                            echo "=== Docker Build ==="
+                            docker build --no-cache -t ${FULL_IMAGE} .
+                            echo "=== Verify image ==="
                             docker images | grep ${IMAGE_NAME}
                             echo "✅ Build complete: ${FULL_IMAGE}"
 ENDSSH
@@ -103,7 +103,7 @@ ENDSSH
             }
         }
 
-        // ── Stage 4: Docker Push to Nexus ────────────────────────────────────
+        // ── Stage 4: Docker Push to Nexus ─────────────────────────────────────
         stage('Docker Tag & Push to Nexus') {
             steps {
                 echo "📤 Pushing: ${FULL_IMAGE}"
@@ -121,39 +121,31 @@ ENDSSH
                 ]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-                        # Pass credentials as env vars — avoids interpolation warning
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
-                            -o SendEnv=NEXUS_USER \\
-                            -o SendEnv=NEXUS_PASS \\
-                            ${REMOTE_USER}@${REMOTE_HOST} \\
-                            "
-                            echo '=== Nexus Login ==='
-                            echo '\$NEXUS_PASS' | docker login ${NEXUS_HOST} --username '\$NEXUS_USER' --password-stdin
+                        ssh -i \$SSH_KEY_FILE -o StrictHostKeyChecking=no \\
+                            ${REMOTE_USER}@${REMOTE_HOST} bash -e << ENDSSH
+                            echo "=== Nexus Login ==="
+                            echo "\$NEXUS_PASS" | docker login ${NEXUS_HOST} --username "\$NEXUS_USER" --password-stdin
 
-                            echo '=== Verify image before push ==='
-                            docker images | grep product-service
-
-                            echo '=== Push to Nexus ==='
+                            echo "=== Push to Nexus ==="
                             docker push ${FULL_IMAGE}
 
-                            echo '=== Logout ==='
+                            echo "=== Logout ==="
                             docker logout ${NEXUS_HOST}
 
-                            echo '=== Cleanup local image ==='
+                            echo "=== Cleanup local image ==="
                             docker rmi ${FULL_IMAGE} || true
 
-                            echo '✅ Pushed: ${FULL_IMAGE}'
-                            "
+                            echo "✅ Pushed: ${FULL_IMAGE}"
+ENDSSH
                     """
                 }
             }
         }
 
-        // ── Stage 5: kubectl get ns (via SSH on VM) ───────────────────────────
+        // ── Stage 5: kubectl get ns ───────────────────────────────────────────
         stage('kubectl get ns') {
             steps {
-                echo "☸️  Listing namespaces via VM..."
+                echo "☸️  Listing Kubernetes namespaces..."
                 withCredentials([sshUserPrivateKey(
                     credentialsId: "${SSH_CRED_ID}",
                     keyFileVariable: 'SSH_KEY_FILE',
@@ -161,11 +153,49 @@ ENDSSH
                 )]) {
                     sh """
                         chmod 600 \$SSH_KEY_FILE
-                        ssh -i \$SSH_KEY_FILE \\
-                            -o StrictHostKeyChecking=no \\
+                        ssh -i \$SSH_KEY_FILE -o StrictHostKeyChecking=no \\
                             ${REMOTE_USER}@${REMOTE_HOST} bash -e << 'ENDSSH'
                             echo "=== Kubernetes Namespaces ==="
                             kubectl get ns
+ENDSSH
+                    """
+                }
+            }
+        }
+
+        // ── Stage 6: Deploy to EKS ────────────────────────────────────────────
+        stage('Deploy to EKS') {
+            steps {
+                echo "☸️  Deploying to EKS: ${K8S_NAMESPACE}/${K8S_DEPLOYMENT}"
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: "${SSH_CRED_ID}",
+                    keyFileVariable: 'SSH_KEY_FILE',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    sh """
+                        chmod 600 \$SSH_KEY_FILE
+                        ssh -i \$SSH_KEY_FILE -o StrictHostKeyChecking=no \\
+                            ${REMOTE_USER}@${REMOTE_HOST} bash -e << 'ENDSSH'
+                            echo "=== Pods before deploy ==="
+                            kubectl get pods -n ${K8S_NAMESPACE} | grep ${K8S_DEPLOYMENT}
+
+                            echo "=== Updating image ==="
+                            kubectl set image deployment/${K8S_DEPLOYMENT} \\
+                                ${K8S_CONTAINER}=${FULL_IMAGE} \\
+                                -n ${K8S_NAMESPACE}
+
+                            echo "=== Waiting for rollout ==="
+                            kubectl rollout status deployment/${K8S_DEPLOYMENT} \\
+                                -n ${K8S_NAMESPACE} --timeout=120s
+
+                            echo "=== Pods after deploy ==="
+                            kubectl get pods -n ${K8S_NAMESPACE} | grep ${K8S_DEPLOYMENT}
+
+                            echo "=== Image now running ==="
+                            kubectl get deployment ${K8S_DEPLOYMENT} -n ${K8S_NAMESPACE} \\
+                                -o=jsonpath='{.spec.template.spec.containers[0].image}'
+                            echo ""
+                            echo "✅ Deployed: ${FULL_IMAGE}"
 ENDSSH
                     """
                 }
@@ -177,8 +207,9 @@ ENDSSH
         success {
             echo "========================================================"
             echo "  ✅ DEPLOYMENT SUCCESS"
-            echo "  Image : ${FULL_IMAGE}"
-            echo "  Build : #${BUILD_NUMBER}"
+            echo "  Image     : ${FULL_IMAGE}"
+            echo "  Namespace : ${K8S_NAMESPACE}"
+            echo "  Build     : #${BUILD_NUMBER}"
             echo "========================================================"
         }
         failure {
