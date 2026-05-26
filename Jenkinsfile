@@ -9,7 +9,7 @@ pipeline {
         REMOTE_HOST = "3.226.177.66"
         REMOTE_USER = "admin"
         SSH_CRED_ID = "jenkins-agent-ssh-key"
-        REMOTE_PATH = "/home/admin/Jenkins-deployment/product-service"
+        REMOTE_PATH = "/home/admin/Jenkins-deployment/QA-Artifact-Push/product-service"
         GIT_BRANCH = "qa"
     }
     options {
@@ -139,6 +139,7 @@ pipeline {
                             ${REMOTE_USER}@${REMOTE_HOST} '
                             cd ${REMOTE_PATH} || { echo "❌ Directory not found: ${REMOTE_PATH}"; exit 1; }
                             echo "🚀 Starting Maven deploy..."
+                            source .env
                             mvn clean deploy
                             echo "✅ Maven deploy completed successfully!"
                         '
