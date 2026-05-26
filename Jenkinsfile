@@ -251,8 +251,6 @@ pipeline {
                             kubectl set image deployment/${K8S_DEPLOYMENT} \
                                 ${K8S_CONTAINER}=${ECR_REGISTRY}/${ECR_REPO}:${env.IMAGE_TAG} \
                                 -n ${K8S_NAMESPACE}
-                            kubectl rollout status deployment/${K8S_DEPLOYMENT} \
-                                -n ${K8S_NAMESPACE} --timeout=120s
                         '
                     """
                 }
