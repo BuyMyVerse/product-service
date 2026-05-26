@@ -11,7 +11,7 @@ pipeline {
         REMOTE_USER   = "admin"
         SSH_CRED_ID   = "jenkins-agent-ssh-key"
         PROJECT_PATH  = "/home/admin/Jenkins-deployment/product-service"
-        BRANCH_NAME   = "Jenkins"
+        BRANCH_NAME   = "QA"
 
         NEXUS_HOST    = "dev-artifacthub.evaequitymtest.com"
         NEXUS_REPO    = "buymyverse-docker-dev"
