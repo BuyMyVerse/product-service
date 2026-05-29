@@ -7,11 +7,13 @@ pipeline {
     }
 
     environment {
+        // ── Remote VM ─────────────────────────────────────────────────────────
         REMOTE_HOST   = "3.226.177.66"
         REMOTE_USER   = "admin"
         SSH_CRED_ID   = "jenkins-agent-ssh-key"
         PROJECT_PATH  = "/home/admin/Jenkins-deployment/product-service"
 
+        // ── Nexus ─────────────────────────────────────────────────────────────
         NEXUS_HOST    = "dev-artifacthub.evaequitymtest.com"
         NEXUS_REPO    = "buymyverse-docker-dev"
         IMAGE_NAME    = "product-service"
@@ -19,24 +21,70 @@ pipeline {
         FULL_IMAGE    = "${NEXUS_HOST}/${NEXUS_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
         NEXUS_CRED_ID = "nexus-credentials"
 
+        // ── Kubernetes ────────────────────────────────────────────────────────
         K8S_NAMESPACE  = "buymyverse-dev"
         K8S_DEPLOYMENT = "product-service"
         K8S_CONTAINER  = "product-service"
+
+        // ── Teams & Git Info ──────────────────────────────────────────────────
+        TEAMS_URL      = credentials('jenkins-cicd-webhook-url')
+        REPO_URL       = 'https://github.com/BuyMyVerse/product-service'
     }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
+        overrideIndexTriggers(true)
     }
 
     stages {
 
-        // ── Stage 1: Notification ─────────────────────────────────────────────
+        // ── Stage 1: Collect Git Metadata ─────────────────────────────────────
+        // Runs for both PR and merge builds
+        // Populates env vars used in Teams notifications
+        stage('Collect Git Info') {
+            steps {
+                script {
+                    // Source branch: feature branch for PR, dev for merge
+                    env.SOURCE_BRANCH   = env.CHANGE_ID ? env.CHANGE_BRANCH : env.BRANCH_NAME
+
+                    // Who triggered this — PR author or last committer
+                    env.COMMITTED_BY    = env.CHANGE_AUTHOR ?: sh(
+                        script: "git log -1 --pretty=format:'%an' || echo 'unknown'",
+                        returnStdout: true
+                    ).trim()
+
+                    // Last commit message
+                    env.COMMIT_MSG      = sh(
+                        script: "git log -1 --pretty=format:'%s' || echo 'N/A'",
+                        returnStdout: true
+                    ).trim().replaceAll("'", "")
+
+                    // PR URL if this is a PR build
+                    env.PR_URL          = env.CHANGE_ID
+                        ? "${REPO_URL}/pull/${env.CHANGE_ID}"
+                        : "${REPO_URL}/tree/${env.BRANCH_NAME}"
+
+                    // Short job name for notification
+                    env.JOB_SHORT       = env.JOB_NAME.tokenize('/').last()
+
+                    echo "=== Git Info ==="
+                    echo "Source Branch : ${env.SOURCE_BRANCH}"
+                    echo "Committed By  : ${env.COMMITTED_BY}"
+                    echo "Commit Msg    : ${env.COMMIT_MSG}"
+                    echo "PR URL        : ${env.PR_URL}"
+                    echo "Image Tag     : ${IMAGE_TAG}"
+                }
+            }
+        }
+
+        // ── Stage 2: Build Notification ───────────────────────────────────────
         stage('Build Notification') {
             steps {
                 script {
                     if (env.CHANGE_ID) {
+                        // PR build — just log, no Teams notification
                         echo "========================================================"
                         echo "  🔍 PR VALIDATION BUILD"
                         echo "========================================================"
@@ -51,6 +99,7 @@ pipeline {
                         echo "  Skipped    : Push to Nexus, kubectl, Deploy to EKS"
                         echo "========================================================"
                     } else {
+                        // Merge build — log + send Teams started notification
                         echo "========================================================"
                         echo "  🚀 FULL DEPLOYMENT BUILD"
                         echo "========================================================"
@@ -63,14 +112,28 @@ pipeline {
                         echo "  EKS NS     : ${K8S_NAMESPACE}"
                         echo "  Started At : ${new Date()}"
                         echo "========================================================"
-                        echo "  Stages     : Checkout → Build → Push → Deploy to EKS"
-                        echo "========================================================"
+
+                        // ── Teams: Deployment Started ──────────────────────────
+                        sh """
+                            curl -s -X POST "${TEAMS_URL}" \\
+                            -H "Content-Type: application/json" \\
+                            -d '{
+                                "status": "started",
+                                "job": "${env.JOB_SHORT}",
+                                "environment": "DEV",
+                                "branch": "${env.SOURCE_BRANCH}",
+                                "committed_by": "${env.COMMITTED_BY}",
+                                "commit_message": "${env.COMMIT_MSG}",
+                                "pr_url": "${env.PR_URL}",
+                                "image_tag": "${IMAGE_TAG}"
+                            }'
+                        """
                     }
                 }
             }
         }
 
-        // ── Stage 2: Git Checkout ─────────────────────────────────────────────
+        // ── Stage 3: Git Checkout ─────────────────────────────────────────────
         // PR build  → checks out the feature branch
         // Merge build → checks out dev
         stage('Git Checkout') {
@@ -102,10 +165,8 @@ ENDSSH
             }
         }
 
-        // ── Stage 3: Docker Build ─────────────────────────────────────────────
+        // ── Stage 4: Docker Build ─────────────────────────────────────────────
         // Runs for BOTH PR and merge builds
-        // PR build  → validates the Dockerfile compiles cleanly
-        // Merge build → builds the final image for push
         stage('Docker Build') {
             steps {
                 script {
@@ -136,12 +197,10 @@ ENDSSH
             }
         }
 
-        // ── Stage 4: Cleanup PR Image ─────────────────────────────────────────
-        // ONLY runs on PR builds — removes the test image, nothing gets pushed
+        // ── Stage 5: Cleanup PR Image ─────────────────────────────────────────
+        // ONLY runs on PR builds
         stage('Cleanup PR Image') {
-            when {
-                changeRequest()
-            }
+            when { changeRequest() }
             steps {
                 echo "🧹 PR build complete — removing local test image (not pushing to Nexus)"
                 withCredentials([sshUserPrivateKey(
@@ -162,11 +221,14 @@ ENDSSH
             }
         }
 
-        // ── Stage 5: Docker Push to Nexus ─────────────────────────────────────
-        // ONLY runs on merge builds (PR merged into dev)
+        // ── Stage 6: Docker Push to Nexus ─────────────────────────────────────
+        // ONLY runs when PR is merged into dev
         stage('Docker Push to Nexus') {
             when {
-                not { changeRequest() }
+                allOf {
+                    not { changeRequest() }
+                    branch 'dev'
+                }
             }
             steps {
                 echo "📤 Pushing image to Nexus: ${FULL_IMAGE}"
@@ -206,11 +268,14 @@ ENDSSH
             }
         }
 
-        // ── Stage 6: Verify Kubernetes Namespaces ─────────────────────────────
-        // ONLY runs on merge builds
+        // ── Stage 7: Verify Kubernetes ────────────────────────────────────────
+        // ONLY runs when PR is merged into dev
         stage('Verify Kubernetes') {
             when {
-                not { changeRequest() }
+                allOf {
+                    not { changeRequest() }
+                    branch 'dev'
+                }
             }
             steps {
                 echo "☸️  Verifying Kubernetes namespaces..."
@@ -231,11 +296,14 @@ ENDSSH
             }
         }
 
-        // ── Stage 7: Deploy to EKS ────────────────────────────────────────────
-        // ONLY runs on merge builds
+        // ── Stage 8: Deploy to EKS ────────────────────────────────────────────
+        // ONLY runs when PR is merged into dev
         stage('Deploy to EKS') {
             when {
-                not { changeRequest() }
+                allOf {
+                    not { changeRequest() }
+                    branch 'dev'
+                }
             }
             steps {
                 echo "☸️  Deploying to EKS namespace: ${K8S_NAMESPACE}"
@@ -280,6 +348,7 @@ ENDSSH
         success {
             script {
                 if (env.CHANGE_ID) {
+                    // PR build success — just log, no Teams notification
                     echo "========================================================"
                     echo "  ✅ PR VALIDATION PASSED"
                     echo "  PR       : #${env.CHANGE_ID} — ${env.CHANGE_TITLE}"
@@ -288,6 +357,7 @@ ENDSSH
                     echo "  ✅ Dockerfile is valid — safe to merge into dev"
                     echo "========================================================"
                 } else {
+                    // Merge build success — log + Teams ended notification
                     echo "========================================================"
                     echo "  ✅ DEPLOYMENT SUCCESSFUL"
                     echo "  Branch    : ${env.BRANCH_NAME}"
@@ -295,12 +365,31 @@ ENDSSH
                     echo "  Namespace : ${K8S_NAMESPACE}"
                     echo "  Build     : #${BUILD_NUMBER}"
                     echo "========================================================"
+
+                    // ── Teams: Deployment Success ──────────────────────────────
+                    sh """
+                        curl -s -X POST "${TEAMS_URL}" \\
+                        -H "Content-Type: application/json" \\
+                        -d '{
+                            "status": "ended",
+                            "job": "${env.JOB_SHORT}",
+                            "environment": "DEV",
+                            "branch": "${env.SOURCE_BRANCH}",
+                            "committed_by": "${env.COMMITTED_BY}",
+                            "commit_message": "${env.COMMIT_MSG}",
+                            "pr_url": "${env.PR_URL}",
+                            "image_tag": "${IMAGE_TAG}",
+                            "docker_image": "${FULL_IMAGE}",
+                            "result": "SUCCESS"
+                        }'
+                    """
                 }
             }
         }
         failure {
             script {
                 if (env.CHANGE_ID) {
+                    // PR build failure — just log, no Teams notification
                     echo "========================================================"
                     echo "  ❌ PR VALIDATION FAILED"
                     echo "  PR    : #${env.CHANGE_ID} — ${env.CHANGE_TITLE}"
@@ -308,12 +397,30 @@ ENDSSH
                     echo "  ❌ Fix the errors above before merging!"
                     echo "========================================================"
                 } else {
+                    // Merge build failure — log + Teams ended notification
                     echo "========================================================"
                     echo "  ❌ DEPLOYMENT FAILED"
                     echo "  Branch : ${env.BRANCH_NAME}"
                     echo "  Build  : #${BUILD_NUMBER}"
                     echo "  ❌ Check console output above for details"
                     echo "========================================================"
+
+                    // ── Teams: Deployment Failed ───────────────────────────────
+                    sh """
+                        curl -s -X POST "${TEAMS_URL}" \\
+                        -H "Content-Type: application/json" \\
+                        -d '{
+                            "status": "ended",
+                            "job": "${env.JOB_SHORT}",
+                            "environment": "DEV",
+                            "branch": "${env.SOURCE_BRANCH}",
+                            "committed_by": "${env.COMMITTED_BY}",
+                            "commit_message": "${env.COMMIT_MSG}",
+                            "pr_url": "${env.PR_URL}",
+                            "image_tag": "${IMAGE_TAG}",
+                            "result": "FAILED"
+                        }'
+                    """
                 }
             }
         }
@@ -321,5 +428,5 @@ ENDSSH
             echo "🧹 Cleaning Jenkins workspace..."
             cleanWs()
         }
-    } 
+    }
 }
