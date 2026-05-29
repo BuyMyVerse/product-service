@@ -314,7 +314,7 @@ ENDSSH
 
                     echo "✅ Sending deployment completed notification..."
 
-                    sendNotification("ended")
+                    sendNotification("SUCCESS")
                 }
 
                 echo "✅ Build completed successfully"
