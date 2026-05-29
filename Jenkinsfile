@@ -7,13 +7,11 @@ pipeline {
     }
 
     environment {
-        // ── Remote VM ─────────────────────────────────────────────────────────
         REMOTE_HOST   = "3.226.177.66"
         REMOTE_USER   = "admin"
         SSH_CRED_ID   = "jenkins-agent-ssh-key"
         PROJECT_PATH  = "/home/admin/Jenkins-deployment/product-service"
 
-        // ── Nexus ─────────────────────────────────────────────────────────────
         NEXUS_HOST    = "dev-artifacthub.evaequitymtest.com"
         NEXUS_REPO    = "buymyverse-docker-dev"
         IMAGE_NAME    = "product-service"
@@ -21,14 +19,14 @@ pipeline {
         FULL_IMAGE    = "${NEXUS_HOST}/${NEXUS_REPO}/${IMAGE_NAME}:${IMAGE_TAG}"
         NEXUS_CRED_ID = "nexus-credentials"
 
-        // ── Kubernetes ────────────────────────────────────────────────────────
         K8S_NAMESPACE  = "buymyverse-dev"
         K8S_DEPLOYMENT = "product-service"
         K8S_CONTAINER  = "product-service"
 
-        // ── Teams & Git Info ──────────────────────────────────────────────────
-        TEAMS_URL      = credentials('jenkins-cicd-webhook-url')
-        REPO_URL       = 'https://github.com/BuyMyVerse/product-service'
+        REPO_URL       = "https://github.com/BuyMyVerse/product-service"
+
+        // ── Teams Webhook — hardcoded ─────────────────────────────────────────
+        TEAMS_URL      = "https://YOUR-TEAMS-WEBHOOK-URL-HERE"
     }
 
     options {
@@ -40,34 +38,27 @@ pipeline {
 
     stages {
 
-        // ── Stage 1: Collect Git Metadata ─────────────────────────────────────
-        // Runs for both PR and merge builds
-        // Populates env vars used in Teams notifications
+        // ── Stage 1: Collect Git Info ─────────────────────────────────────────
         stage('Collect Git Info') {
             steps {
                 script {
-                    // Source branch: feature branch for PR, dev for merge
-                    env.SOURCE_BRANCH   = env.CHANGE_ID ? env.CHANGE_BRANCH : env.BRANCH_NAME
+                    env.SOURCE_BRANCH = env.CHANGE_ID ? env.CHANGE_BRANCH : env.BRANCH_NAME
 
-                    // Who triggered this — PR author or last committer
-                    env.COMMITTED_BY    = env.CHANGE_AUTHOR ?: sh(
-                        script: "git log -1 --pretty=format:'%an' || echo 'unknown'",
+                    env.COMMITTED_BY  = env.CHANGE_AUTHOR ?: sh(
+                        script: "git log -1 --pretty=format:'%an' 2>/dev/null || echo 'unknown'",
                         returnStdout: true
                     ).trim()
 
-                    // Last commit message
-                    env.COMMIT_MSG      = sh(
-                        script: "git log -1 --pretty=format:'%s' || echo 'N/A'",
+                    env.COMMIT_MSG = sh(
+                        script: "git log -1 --pretty=format:'%s' 2>/dev/null || echo 'N/A'",
                         returnStdout: true
-                    ).trim().replaceAll("'", "")
+                    ).trim().replaceAll("'", "").replaceAll('"', '')
 
-                    // PR URL if this is a PR build
-                    env.PR_URL          = env.CHANGE_ID
+                    env.PR_URL    = env.CHANGE_ID
                         ? "${REPO_URL}/pull/${env.CHANGE_ID}"
                         : "${REPO_URL}/tree/${env.BRANCH_NAME}"
 
-                    // Short job name for notification
-                    env.JOB_SHORT       = env.JOB_NAME.tokenize('/').last()
+                    env.JOB_SHORT = env.JOB_NAME.tokenize('/').last()
 
                     echo "=== Git Info ==="
                     echo "Source Branch : ${env.SOURCE_BRANCH}"
@@ -84,7 +75,6 @@ pipeline {
             steps {
                 script {
                     if (env.CHANGE_ID) {
-                        // PR build — just log, no Teams notification
                         echo "========================================================"
                         echo "  🔍 PR VALIDATION BUILD"
                         echo "========================================================"
@@ -99,7 +89,6 @@ pipeline {
                         echo "  Skipped    : Push to Nexus, kubectl, Deploy to EKS"
                         echo "========================================================"
                     } else {
-                        // Merge build — log + send Teams started notification
                         echo "========================================================"
                         echo "  🚀 FULL DEPLOYMENT BUILD"
                         echo "========================================================"
@@ -111,6 +100,8 @@ pipeline {
                         echo "  Target VM  : ${REMOTE_USER}@${REMOTE_HOST}"
                         echo "  EKS NS     : ${K8S_NAMESPACE}"
                         echo "  Started At : ${new Date()}"
+                        echo "========================================================"
+                        echo "  Stages     : Checkout → Build → Push → Deploy to EKS"
                         echo "========================================================"
 
                         // ── Teams: Deployment Started ──────────────────────────
@@ -348,7 +339,7 @@ ENDSSH
         success {
             script {
                 if (env.CHANGE_ID) {
-                    // PR build success — just log, no Teams notification
+                    // PR build — console only, no Teams
                     echo "========================================================"
                     echo "  ✅ PR VALIDATION PASSED"
                     echo "  PR       : #${env.CHANGE_ID} — ${env.CHANGE_TITLE}"
@@ -357,7 +348,7 @@ ENDSSH
                     echo "  ✅ Dockerfile is valid — safe to merge into dev"
                     echo "========================================================"
                 } else {
-                    // Merge build success — log + Teams ended notification
+                    // Merge build — console + Teams success
                     echo "========================================================"
                     echo "  ✅ DEPLOYMENT SUCCESSFUL"
                     echo "  Branch    : ${env.BRANCH_NAME}"
@@ -366,7 +357,6 @@ ENDSSH
                     echo "  Build     : #${BUILD_NUMBER}"
                     echo "========================================================"
 
-                    // ── Teams: Deployment Success ──────────────────────────────
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
@@ -389,7 +379,7 @@ ENDSSH
         failure {
             script {
                 if (env.CHANGE_ID) {
-                    // PR build failure — just log, no Teams notification
+                    // PR build — console only, no Teams
                     echo "========================================================"
                     echo "  ❌ PR VALIDATION FAILED"
                     echo "  PR    : #${env.CHANGE_ID} — ${env.CHANGE_TITLE}"
@@ -397,7 +387,7 @@ ENDSSH
                     echo "  ❌ Fix the errors above before merging!"
                     echo "========================================================"
                 } else {
-                    // Merge build failure — log + Teams ended notification
+                    // Merge build — console + Teams failure
                     echo "========================================================"
                     echo "  ❌ DEPLOYMENT FAILED"
                     echo "  Branch : ${env.BRANCH_NAME}"
@@ -405,7 +395,6 @@ ENDSSH
                     echo "  ❌ Check console output above for details"
                     echo "========================================================"
 
-                    // ── Teams: Deployment Failed ───────────────────────────────
                     sh """
                         curl -s -X POST "${TEAMS_URL}" \\
                         -H "Content-Type: application/json" \\
@@ -425,8 +414,14 @@ ENDSSH
             }
         }
         always {
-            echo "🧹 Cleaning Jenkins workspace..."
-            cleanWs()
+            script {
+                try {
+                    cleanWs()
+                    echo "🧹 Workspace cleaned successfully"
+                } catch (Exception e) {
+                    echo "⚠️ Workspace cleanup skipped — no workspace context"
+                }
+            }
         }
     }
 }
