@@ -80,6 +80,12 @@ ENDSSH
 
         // ── Stage 3: Docker Build ─────────────────────────────────────────────
         stage('Docker Build') {
+            when {
+                allOf {
+                    not { changeRequest() }
+                    branch 'qa'
+                }
+            }
             steps {
                 echo "🐳 Building: ${FULL_IMAGE}"
                 withCredentials([sshUserPrivateKey(
