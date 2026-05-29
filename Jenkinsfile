@@ -4,7 +4,7 @@ pipeline {
     environment {
         REMOTE_HOST   = "3.226.177.66"
         REMOTE_USER   = "admin"
-        SSH_CRED_ID   = "jenkins-agent-ssh-key"
+        SSH_CRED_ID   = "buymyverse-ec2-key"
         PROJECT_PATH  = "/home/admin/Jenkins-deployment/product-service"
         BRANCH_NAME   = "dev"
 
