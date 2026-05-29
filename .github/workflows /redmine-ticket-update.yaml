@@ -1,0 +1,217 @@
+name: Validate Redmine Ticket on PR
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  validate-ticket:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 🔹 FLAG CHECK
+      - name: Check VALIDATE_REDMINE flag
+        id: flag
+        run: |
+          if [ "${{ vars.VALIDATE_REDMINE }}" = "YES" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if disabled
+        if: steps.flag.outputs.enabled == 'false'
+        run: echo "Skipping Redmine validation"
+
+      # 🔹 EXTRACT ISSUE ID
+      - name: Extract issue number from branch
+        if: steps.flag.outputs.enabled == 'true'
+        id: extract
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          ISSUE_ID=$(echo "$BRANCH" | sed -n 's|^[^/]*/\([0-9]\+\).*|\1|p')
+
+          if [ -z "$ISSUE_ID" ]; then
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "issue_id=$ISSUE_ID" >> $GITHUB_OUTPUT
+            echo "found=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 🔹 REDMINE VALIDATION
+      - name: Check ticket in Redmine
+        if: steps.extract.outputs.found == 'true' && steps.flag.outputs.enabled == 'true'
+        id: check
+        run: |
+          ISSUE_ID="${{ steps.extract.outputs.issue_id }}"
+          PROJECT_NAME="${{ vars.REDMINE_PROJECT_NAME }}"
+          REDMINE_URL="${{ vars.REDMINE_URL }}"
+
+          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
+            -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+            "$REDMINE_URL/issues/$ISSUE_ID.json")
+
+          if [ "$RESPONSE" = "200" ]; then
+            PROJECT=$(python3 -c "import json;print(json.load(open('response.json'))['issue']['project']['name'])")
+            STATUS=$(python3 -c "import json;print(json.load(open('response.json'))['issue']['status']['name'])")
+
+            echo "project=$PROJECT" >> $GITHUB_OUTPUT
+            echo "expected=$PROJECT_NAME" >> $GITHUB_OUTPUT
+            echo "current_status=$STATUS" >> $GITHUB_OUTPUT
+          else
+            echo "project=not_found" >> $GITHUB_OUTPUT
+            echo "expected=$PROJECT_NAME" >> $GITHUB_OUTPUT
+            echo "current_status=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      # FAIL CASE
+      - name: Post error comment
+        if: steps.flag.outputs.enabled == 'true' && (steps.extract.outputs.found == 'false' || steps.check.outputs.project != steps.check.outputs.expected)
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: `Invalid Redmine ticket for branch \`${branch}\``
+            });
+            core.setFailed("Validation failed")
+
+      # SUCCESS CASE
+      - name: Post success comment
+        if: steps.flag.outputs.enabled == 'true' && steps.extract.outputs.found == 'true' && steps.check.outputs.project == steps.check.outputs.expected
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issueId = '${{ steps.extract.outputs.issue_id }}';
+            const status = '${{ steps.check.outputs.current_status }}';
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: `Ticket #${issueId} validated\nStatus: ${status}`
+            });
+
+      # 🔹 GET APPROVERS
+      - name: Get PR approvers
+        if: steps.flag.outputs.enabled == 'true' && steps.extract.outputs.found == 'true'
+        id: reviewers
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+
+            const approvers = reviews.data
+              .filter(r => r.state === 'APPROVED')
+              .map(r => r.user.login)
+              .join(', ') || 'No approvals yet';
+
+            core.setOutput('approvers', approvers);
+
+      # MOVE TO READY FOR REVIEW
+      - name: Move to Ready for Review
+        if: steps.flag.outputs.enabled == 'true' && github.event.action != 'closed'
+        run: |
+          ISSUE_ID="${{ steps.extract.outputs.issue_id }}"
+          STATUS="${{ steps.check.outputs.current_status }}"
+          REDMINE_URL="${{ vars.REDMINE_URL }}"
+
+          if [ "$STATUS" = "In Progress" ]; then
+            STATUS_ID=$(curl -s \
+              -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+              "$REDMINE_URL/issue_statuses.json" | \
+              python3 -c "import sys,json;print([s['id'] for s in json.load(sys.stdin)['issue_statuses'] if s['name']=='Ready for Review'][0])")
+
+            curl -s -X PUT \
+              -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"issue\": {\"status_id\": $STATUS_ID}}" \
+              "$REDMINE_URL/issues/$ISSUE_ID.json"
+          fi
+
+      # MOVE TO READY FOR QA
+      - name: Move to Ready for QA
+        if: steps.flag.outputs.enabled == 'true' && github.event.pull_request.merged == true
+        run: |
+          ISSUE_ID="${{ steps.extract.outputs.issue_id }}"
+          STATUS="${{ steps.check.outputs.current_status }}"
+          REDMINE_URL="${{ vars.REDMINE_URL }}"
+
+          if [ "$STATUS" = "Ready for Review" ]; then
+            STATUS_ID=$(curl -s \
+              -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+              "$REDMINE_URL/issue_statuses.json" | \
+              python3 -c "import sys,json;print([s['id'] for s in json.load(sys.stdin)['issue_statuses'] if s['name']=='Ready for QA'][0])")
+
+            curl -s -X PUT \
+              -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"issue\": {\"status_id\": $STATUS_ID}}" \
+              "$REDMINE_URL/issues/$ISSUE_ID.json"
+          fi
+
+      # 🟢 REDMINE NOTE - PR OPENED
+      - name: Add Redmine note (PR opened)
+        if: steps.flag.outputs.enabled == 'true' && github.event.action != 'closed'
+        run: |
+          ISSUE_ID="${{ steps.extract.outputs.issue_id }}"
+          REDMINE_URL="${{ vars.REDMINE_URL }}"
+
+          python3 -c "
+          import json
+          payload = {
+              'issue': {
+                  'notes': 'GitHub Pull Request Notification\n\nStatus: PR opened\nPR Number: #${{ github.event.pull_request.number }}\nPR Title: ${{ github.event.pull_request.title }}\nPR URL: ${{ github.event.pull_request.html_url }}\n\nFrom Branch: ${{ github.event.pull_request.head.ref }}\nTo Branch: ${{ github.event.pull_request.base.ref }}\n\nPR Opened By: @${{ github.event.pull_request.user.login }}'
+              }
+          }
+          with open('payload.json', 'w') as f:
+              json.dump(payload, f)
+          "
+
+          curl -s -X PUT \
+            -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @payload.json \
+            "$REDMINE_URL/issues/$ISSUE_ID.json"
+
+      # REDMINE NOTE - PR CLOSED / MERGED
+      - name: Add Redmine note (PR closed/merged)
+        if: steps.flag.outputs.enabled == 'true' && github.event.action == 'closed'
+        run: |
+          ISSUE_ID="${{ steps.extract.outputs.issue_id }}"
+          REDMINE_URL="${{ vars.REDMINE_URL }}"
+
+          if [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+            STATUS="MERGED"
+          else
+            STATUS="CLOSED"
+          fi
+
+          python3 -c "
+          import json
+          status = '$STATUS'
+          payload = {
+              'issue': {
+                  'notes': f'GitHub Pull Request {status}\n\nStatus: {status}\nPR Number: #${{ github.event.pull_request.number }}\nPR Title: ${{ github.event.pull_request.title }}\nPR URL: ${{ github.event.pull_request.html_url }}\n\nFrom Branch: ${{ github.event.pull_request.head.ref }}\nTo Branch: ${{ github.event.pull_request.base.ref }}\n\nPR Opened By: @${{ github.event.pull_request.user.login }}\nApproved By: ${{ steps.reviewers.outputs.approvers }}'
+              }
+          }
+          with open('payload.json', 'w') as f:
+              json.dump(payload, f)
+          "
+
+          curl -s -X PUT \
+            -H "X-Redmine-API-Key: ${{ secrets.REDMINE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d @payload.json \
+            "$REDMINE_URL/issues/$ISSUE_ID.json"
