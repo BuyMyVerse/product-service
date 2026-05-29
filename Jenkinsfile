@@ -1,10 +1,5 @@
 pipeline {
-    agent {
-        kubernetes {
-            inheritFrom 'jenkins-agent'
-            defaultContainer 'jnlp'
-        }
-    }
+    agent any
 
     environment {
         REMOTE_HOST   = "3.226.177.66"
@@ -80,12 +75,6 @@ ENDSSH
 
         // ── Stage 3: Docker Build ─────────────────────────────────────────────
         stage('Docker Build') {
-            when {
-                allOf {
-                    not { changeRequest() }
-                    branch 'qa'
-                }
-            }
             steps {
                 echo "🐳 Building: ${FULL_IMAGE}"
                 withCredentials([sshUserPrivateKey(
