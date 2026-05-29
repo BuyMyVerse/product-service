@@ -149,7 +149,7 @@ ENDSSH
 
                     echo "🚀 Sending deployment start notification..."
 
-                    sendNotification("deployment_starting")
+                    sendNotification("started")
                 }
             }
         }
@@ -314,7 +314,7 @@ ENDSSH
 
                     echo "✅ Sending deployment completed notification..."
 
-                    sendNotification("deployment_completed")
+                    sendNotification("ended")
                 }
 
                 echo "✅ Build completed successfully"
@@ -329,7 +329,7 @@ ENDSSH
 
                     echo "❌ Sending deployment failed notification..."
 
-                    sendNotification("deployment_failed")
+                    sendNotification("ended")
                 }
 
                 echo "❌ Build failed"
