@@ -222,5 +222,5 @@ ENDSSH
             echo "🧹 Cleaning workspace..."
             cleanWs()
         }
-    }
+    } 
 }
