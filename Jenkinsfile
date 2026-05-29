@@ -3,7 +3,7 @@ pipeline {
         kubernetes {
             inheritFrom 'jenkins-agent'
             defaultContainer 'jnlp'
-        }
+        } 
     }
 
     environment {
