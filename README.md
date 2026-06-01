@@ -1,4 +1,4 @@
-# Spring Boot Demo API     
+# Spring Boot Demo API                
 
 A simple Spring Boot 3 REST API (Java 17) with in-memory sample data — no database required.
 
@@ -6,8 +6,9 @@ A simple Spring Boot 3 REST API (Java 17) with in-memory sample data — no data
 
 ## 📦 Project Structure
 
+
 ```
-springboot-demo/
+springboot-demo/ 
 ├── src/
 │   └── main/
 │       ├── java/com/demo/api/
