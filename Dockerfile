@@ -3,7 +3,7 @@ FROM maven:3.9.6-eclipse-temurin-17 AS builder
 
 WORKDIR /app
 
-# Cache dependencies first
+# Cache dependencies first  
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
  
