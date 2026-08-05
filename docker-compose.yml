@@ -11,4 +11,3 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=default
     restart: unless-stopped
- 
